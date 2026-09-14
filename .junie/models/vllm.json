@@ -1,0 +1,6 @@
+{
+  "displayName": "vLLM (Gemma 4)",
+  "id": "/models/RedHatAI/gemma-4-12B-it-FP8-Dynamic",
+  "baseUrl": "http://vllm-gemma-4-router-service.vllm.svc.prod/v1/responses",
+  "apiType": "OpenAIResponses"
+}
