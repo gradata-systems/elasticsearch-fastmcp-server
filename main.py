@@ -38,6 +38,9 @@ mcp = FastMCP(
         realm_url=settings.keycloak_realm_url,
         base_url=settings.public_base_url,
         audience=settings.keycloak_audience,
+        # The default requires 'openid', which client-credentials agents only get when they ask
+        # for it. Access rests on the issuer, the es-mcp audience and the username claim instead.
+        required_scopes=[],
     ),
     middleware=[AuditMiddleware()],
 )

@@ -114,8 +114,9 @@ definitions, tested against Keycloak 26.5:
 | `client-agent.json` | template for one automation agent: client credentials via a service account |
 
 A token is accepted only when it is issued by `ES_MCP_KEYCLOAK_REALM_URL` (the `iss` claim must
-match exactly, so use the realm's public URL), has `aud: es-mcp`, carries `openid` in its `scope`,
-and names an impersonable user in `preferred_username`.
+match exactly, so use the realm's public URL), has `aud: es-mcp`, and names an impersonable user
+in `preferred_username`. No particular OAuth scope is required: the `es-mcp` client scope supplies
+the audience and username, so it must be a default scope on every calling client.
 
 **1. Create the client scope and clients** (`kcadm.sh` ships in the Keycloak image; the admin
 console's *Clients → Import client* also accepts the two client files, but client scopes must be
@@ -139,10 +140,11 @@ set `publicClient: true` only for clients that can't keep a secret. Users sign i
 
 **3. Agents.** Each agent's service account is named `service-account-<clientId>`, e.g.
 `service-account-langgraph-triage`; create the matching Elasticsearch user described in
-*Elasticsearch setup*. Agents must request the `openid` scope, or the server rejects the token:
+*Elasticsearch setup*. An agent gets its token with a plain client-credentials request:
 
 ```
-curl https://keycloak.example.com/realms/security/protocol/openid-connect/token   -d grant_type=client_credentials -d client_id=langgraph-triage -d client_secret=... -d scope=openid
+curl https://keycloak.example.com/realms/security/protocol/openid-connect/token \
+  -d grant_type=client_credentials -d client_id=langgraph-triage -d client_secret=...
 ```
 
 **4. Lock down usernames.** Access is decided by `preferred_username`; if users can rename
