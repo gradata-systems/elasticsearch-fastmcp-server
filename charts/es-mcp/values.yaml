@@ -1,0 +1,161 @@
+image:
+  repository: ghcr.io/gradata-systems/elasticsearch-fastmcp-server
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+# MCP sessions are held in memory by the replica that started them. With more than one replica,
+# either run stateless (each request stands alone) or pin clients with service.sessionAffinity.
+statelessHttp: false
+
+# External URL clients use to reach the server, e.g. https://es-mcp.example.com. Used in OAuth
+# metadata, so it must match what clients connect to (the load balancer's DNS name).
+publicBaseUrl: ""
+
+elasticsearch:
+  # e.g. https://prod-es-data-http.elastic.svc.prod:9200
+  url: ""
+  requestTimeout: 30
+  # Native ES user holding only the run_as privilege.
+  impersonator:
+    username: mcp_impersonator
+    # Used to create a Secret when existingSecret is empty. Prefer existingSecret.
+    password: ""
+    existingSecret: ""
+    existingSecretKey: password
+  # CA that signed Elasticsearch's HTTPS certificate. Leave both names empty to use the system CAs.
+  ca:
+    secretName: ""
+    configMapName: ""
+    key: ca.crt
+
+keycloak:
+  # e.g. https://keycloak.example.com/realms/security
+  realmUrl: ""
+  audience: es-mcp
+  # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
+  usernameClaim: preferred_username
+
+limits:
+  maxResultSize: 500
+  maxResponseChars: 100000
+  maxTimeRangeDays: 90
+
+# Replaces the image's access_policy.yaml when set, e.g.
+#   exposed_indices: [ecs-microsoft-windows-*, ecs-fortios-*]
+#   impersonable_users: ["*.*", "service-account-*"]
+accessPolicy: {}
+
+# Replaces the image's built-in source packs when set. Keys are file names; values are the pack
+# as YAML text or as a map, e.g. --set-file 'packs.windows\.yaml=packs/windows.yaml'.
+packs: {}
+
+# The server terminates TLS itself, so a LoadBalancer service can pass traffic straight through.
+tls:
+  enabled: true
+  # kubernetes.io/tls Secret with tls.crt and tls.key.
+  existingSecret: ""
+  # Or have cert-manager issue the certificate (into <fullname>-tls unless existingSecret is set).
+  certManager:
+    enabled: false
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+      group: cert-manager.io
+    # Defaults to the host of publicBaseUrl.
+    dnsNames: []
+    ipAddresses: []
+    duration: ""
+    renewBefore: ""
+  # The server reads its certificate at startup, so a renewed certificate takes effect on the next
+  # restart. Set deploymentAnnotations for a reloader (e.g. secret.reloader.stakater.com/reload)
+  # to restart automatically.
+
+service:
+  # ClusterIP, NodePort or LoadBalancer.
+  type: ClusterIP
+  # Defaults to 443 with TLS enabled, 80 without.
+  port: null
+  nodePort: null
+  annotations: {}
+  labels: {}
+  loadBalancerIP: ""
+  loadBalancerClass: ""
+  loadBalancerSourceRanges: []
+  # Local preserves client source addresses on LoadBalancer and NodePort services.
+  externalTrafficPolicy: ""
+  internalTrafficPolicy: ""
+  # ClientIP pins each client to one replica, keeping in-memory MCP sessions working.
+  sessionAffinity: ""
+  sessionAffinityConfig: {}
+  ipFamilyPolicy: ""
+  ipFamilies: []
+  externalIPs: []
+
+containerPort: 8000
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  # The server never calls the Kubernetes API.
+  automountToken: false
+
+deploymentAnnotations: {}
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /healthz
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Additional ES_MCP_* settings or anything else, e.g. [{name: ES_MCP_AUDIT_LOG_FILE, value: ...}].
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""

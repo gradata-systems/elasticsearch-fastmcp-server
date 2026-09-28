@@ -1,0 +1,210 @@
+{{- $es := .Values.elasticsearch }}
+{{- if and $es.ca.secretName $es.ca.configMapName }}
+{{- fail "set only one of elasticsearch.ca.secretName and elasticsearch.ca.configMapName" }}
+{{- end }}
+{{- if not (or $es.impersonator.existingSecret $es.impersonator.password) }}
+{{- fail "set elasticsearch.impersonator.existingSecret (or elasticsearch.impersonator.password)" }}
+{{- end }}
+{{- $portName := include "es-mcp.portName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "es-mcp.fullname" . }}
+  labels:
+    {{- include "es-mcp.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "es-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "es-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Restart pods when the policy, packs or generated password change.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "es-mcp.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: es-mcp
+          image: {{ include "es-mcp.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: {{ $portName }}
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          env:
+            - name: ES_MCP_HOST
+              value: "0.0.0.0"
+            - name: ES_MCP_PORT
+              value: {{ .Values.containerPort | quote }}
+            - name: ES_MCP_PUBLIC_BASE_URL
+              value: {{ required "publicBaseUrl is required" .Values.publicBaseUrl | quote }}
+            - name: ES_MCP_ES_URL
+              value: {{ required "elasticsearch.url is required" $es.url | quote }}
+            - name: ES_MCP_ES_REQUEST_TIMEOUT
+              value: {{ $es.requestTimeout | quote }}
+            - name: ES_MCP_ES_IMPERSONATOR_USERNAME
+              value: {{ $es.impersonator.username | quote }}
+            - name: ES_MCP_ES_IMPERSONATOR_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "es-mcp.impersonatorSecretName" . }}
+                  key: {{ include "es-mcp.impersonatorSecretKey" . }}
+            {{- if or $es.ca.secretName $es.ca.configMapName }}
+            - name: ES_MCP_ES_CA_CERTS
+              value: /etc/es-mcp/es-ca/{{ $es.ca.key }}
+            {{- end }}
+            - name: ES_MCP_KEYCLOAK_REALM_URL
+              value: {{ required "keycloak.realmUrl is required" .Values.keycloak.realmUrl | quote }}
+            - name: ES_MCP_KEYCLOAK_AUDIENCE
+              value: {{ required "keycloak.audience is required" .Values.keycloak.audience | quote }}
+            - name: ES_MCP_USERNAME_CLAIM
+              value: {{ .Values.keycloak.usernameClaim | quote }}
+            - name: ES_MCP_MAX_RESULT_SIZE
+              value: {{ .Values.limits.maxResultSize | quote }}
+            - name: ES_MCP_MAX_RESPONSE_CHARS
+              value: {{ .Values.limits.maxResponseChars | quote }}
+            - name: ES_MCP_MAX_TIME_RANGE_DAYS
+              value: {{ .Values.limits.maxTimeRangeDays | quote }}
+            {{- if .Values.accessPolicy }}
+            - name: ES_MCP_ACCESS_POLICY_FILE
+              value: /etc/es-mcp/config/access_policy.yaml
+            {{- end }}
+            {{- if .Values.packs }}
+            - name: ES_MCP_PACKS_DIR
+              value: /etc/es-mcp/packs
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: ES_MCP_TLS_CERTFILE
+              value: /etc/es-mcp/tls/tls.crt
+            - name: ES_MCP_TLS_KEYFILE
+              value: /etc/es-mcp/tls/tls.key
+            {{- end }}
+            - name: FASTMCP_STATELESS_HTTP
+              value: {{ .Values.statelessHttp | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- range $name := list "livenessProbe" "readinessProbe" }}
+          {{- with index $.Values $name }}
+          {{- $probe := deepCopy . }}
+          {{- if $probe.httpGet }}
+          {{- $_ := set $probe.httpGet "port" $portName }}
+          {{- $_ := set $probe.httpGet "scheme" (upper $portName) }}
+          {{- end }}
+          {{ $name }}:
+            {{- toYaml $probe | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /etc/es-mcp/tls
+              readOnly: true
+            {{- end }}
+            {{- if or $es.ca.secretName $es.ca.configMapName }}
+            - name: es-ca
+              mountPath: /etc/es-mcp/es-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.accessPolicy }}
+            - name: config
+              mountPath: /etc/es-mcp/config
+              readOnly: true
+            {{- end }}
+            {{- if .Values.packs }}
+            - name: packs
+              mountPath: /etc/es-mcp/packs
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ include "es-mcp.tlsSecretName" . }}
+        {{- end }}
+        {{- if $es.ca.secretName }}
+        - name: es-ca
+          secret:
+            secretName: {{ $es.ca.secretName }}
+        {{- else if $es.ca.configMapName }}
+        - name: es-ca
+          configMap:
+            name: {{ $es.ca.configMapName }}
+        {{- end }}
+        {{- if .Values.accessPolicy }}
+        - name: config
+          configMap:
+            name: {{ include "es-mcp.fullname" . }}
+            items:
+              - key: access_policy.yaml
+                path: access_policy.yaml
+        {{- end }}
+        {{- if .Values.packs }}
+        - name: packs
+          configMap:
+            name: {{ include "es-mcp.fullname" . }}-packs
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

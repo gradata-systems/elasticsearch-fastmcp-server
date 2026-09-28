@@ -141,3 +141,91 @@ uv run python main.py
 
 Terminate TLS at your ingress, or set `ES_MCP_TLS_CERTFILE` / `ES_MCP_TLS_KEYFILE` to serve HTTPS
 directly. Tests: `uv run pytest`.
+
+## Deploying to Kubernetes
+
+The Helm chart in `charts/es-mcp` runs the server with TLS terminated by the server itself, so it
+can sit directly behind a `LoadBalancer` service (L4 pass-through) with no ingress controller.
+
+**1. Build and push the image.** The image bakes in `access_policy.yaml` and `packs/` as
+defaults; the chart can replace either without a rebuild.
+
+```
+docker build -t ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.1.0 .
+docker push ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.1.0
+```
+
+**2. Create the secrets** in the target namespace (see *Elasticsearch setup* for the account):
+
+```
+kubectl create namespace es-mcp
+kubectl -n es-mcp create secret generic es-mcp-impersonator --from-literal=password='<generated>'
+kubectl -n es-mcp create secret generic es-ca --from-file=ca.crt=es-ca.crt   # CA of the ES HTTPS cert
+kubectl -n es-mcp create secret tls es-mcp-tls --cert=tls.crt --key=tls.key   # server certificate
+```
+
+The server certificate must cover the host name in `publicBaseUrl`. To have cert-manager issue it
+instead, skip the last command and set `tls.certManager.enabled=true` with an `issuerRef`.
+
+**3. Write a values file**, e.g. `es-mcp-values.yaml`:
+
+```yaml
+publicBaseUrl: https://es-mcp.example.com   # what clients connect to; used in OAuth metadata
+elasticsearch:
+  url: https://prod-es-data-http.elastic.svc.prod:9200
+  impersonator:
+    existingSecret: es-mcp-impersonator
+  ca:
+    secretName: es-ca
+keycloak:
+  realmUrl: https://keycloak.example.com/realms/security
+  audience: es-mcp
+tls:
+  existingSecret: es-mcp-tls
+  # certManager: {enabled: true, issuerRef: {name: internal-ca, kind: ClusterIssuer}}
+service:
+  type: LoadBalancer
+  port: 443
+  loadBalancerIP: 10.0.0.50                 # optional; or annotations for your LB implementation
+  loadBalancerSourceRanges: [10.0.0.0/8]
+  externalTrafficPolicy: Local              # preserve client addresses
+  annotations: {}
+```
+
+**4. Install, then point DNS at the load balancer:**
+
+```
+helm upgrade --install es-mcp charts/es-mcp -n es-mcp -f es-mcp-values.yaml
+kubectl -n es-mcp get service es-mcp -o jsonpath='{.status.loadBalancer.ingress[0]}'
+curl https://es-mcp.example.com/healthz     # "ok"; the MCP endpoint is /mcp
+```
+
+Rendering fails with a clear message if a required setting (URLs, impersonator secret, TLS
+source) is missing.
+
+**Changing the policy or packs.** `accessPolicy` replaces the image's `access_policy.yaml`, and
+`packs` replaces the built-in packs (include every pack you want to keep):
+
+```
+helm upgrade es-mcp charts/es-mcp -n es-mcp -f es-mcp-values.yaml \
+  --set-file 'packs.windows\.yaml=packs/windows.yaml' \
+  --set-file 'packs.fortios\.yaml=packs/fortios.yaml'
+```
+
+Pods restart automatically when the policy, packs or chart-managed password change.
+
+**Things to know**
+
+- **Certificate renewal:** the server reads its certificate at startup. After the TLS secret is
+  renewed, restart it (`kubectl -n es-mcp rollout restart deployment es-mcp`) or add a reloader
+  annotation through `deploymentAnnotations`.
+- **Replicas:** MCP sessions live in the memory of the replica that started them. With
+  `replicaCount` above 1, set `statelessHttp: true` or `service.sessionAffinity: ClientIP`.
+- **Service options:** `service` accepts `type`, `port`, `nodePort`, `annotations`, `labels`,
+  `loadBalancerIP`, `loadBalancerClass`, `loadBalancerSourceRanges`, `externalTrafficPolicy`,
+  `internalTrafficPolicy`, `sessionAffinity(Config)`, `ipFamilyPolicy`, `ipFamilies` and
+  `externalIPs`. See `charts/es-mcp/values.yaml` for all settings.
+- **TLS elsewhere:** if TLS is terminated in front of the server (an ingress or TLS-terminating
+  load balancer), set `tls.enabled: false`; the service then listens on port 80.
+- **Probes:** `/healthz` is unauthenticated and doesn't depend on Elasticsearch or Keycloak, so an
+  outage there doesn't restart the pods.

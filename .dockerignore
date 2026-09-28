@@ -1,0 +1,13 @@
+# Keep secrets and local state out of the build context.
+.ai/
+.env
+*.pem
+*.key
+.git/
+.idea/
+.junie/
+.venv/
+**/__pycache__/
+audit*.log
+charts/
+tests/

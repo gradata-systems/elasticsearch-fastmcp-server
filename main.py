@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.keycloak import KeycloakAuthProvider
+from starlette.requests import Request
+from starlette.responses import PlainTextResponse, Response
 
 from config import Settings
 from security.audit import AuditMiddleware, configure_audit_log
@@ -39,6 +41,13 @@ mcp = FastMCP(
     ),
     middleware=[AuditMiddleware()],
 )
+
+@mcp.custom_route('/healthz', methods=['GET'], include_in_schema=False)
+async def healthz(request: Request) -> Response:
+    """Liveness and readiness probe. Unauthenticated, and deliberately independent of Elasticsearch
+    and Keycloak so an outage there doesn't restart every replica."""
+    return PlainTextResponse('ok')
+
 
 for tool in generic.ALL_TOOLS:
     mcp.tool(tool)
