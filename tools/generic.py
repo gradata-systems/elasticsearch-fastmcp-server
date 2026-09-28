@@ -1,4 +1,5 @@
 """Source-agnostic tools that work against any index the caller may read."""
+import fnmatch
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
@@ -88,7 +89,7 @@ async def list_data_sources(ctx: Context) -> dict[str, Any]:
     }
     readable = set(result['indices']) | set(result['aliases']) | set(result['data_streams'])
     result['sources'] = [pack.summary() for pack in ctx.lifespan_context.get('packs', [])
-                         if pack.index in readable]
+                         if any(fnmatch.fnmatchcase(name, pack.index) for name in readable)]
     return result
 
 

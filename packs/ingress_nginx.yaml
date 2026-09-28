@@ -1,6 +1,6 @@
 name: ingress_nginx
 title: Kubernetes ingress-nginx access logs
-index: ecs-ingress-nginx-access-v1
+index: ecs-ingress-nginx-access-*
 description: >
   HTTP access logs from the Kubernetes ingress-nginx controller: one event per request to a
   published web application, with client address and geolocation, requested URL, method,

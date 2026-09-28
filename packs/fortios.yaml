@@ -1,10 +1,15 @@
 name: fortios
 title: FortiGate firewall logs (FortiOS)
-index: ecs-fortios-v1
+index: ecs-fortios-*
 description: >
   Logs from the FortiGate firewall: forwarded traffic sessions, VPN negotiation and tunnel
   events, system events, and UTM events (application control, SSL inspection, intrusion
-  prevention). One event per log record.
+  prevention). One event per log record. Each event is stored in exactly one retention tier:
+  local-traffic sessions (to the firewall itself) for about 4 months (ecs-fortios-rm-*), bulk
+  forwarded traffic and application control for about 1 month (ecs-fortios-rs-*), and VPN,
+  system, IPS and selected forwarded traffic for about 2 years (ecs-fortios-v1). Searches cover
+  all tiers, so older periods contain progressively less; an empty result there does not mean
+  nothing happened.
 key_fields:
   source.ip: Originating address
   destination.ip: Target address
@@ -15,8 +20,8 @@ key_fields:
   rule.name: Firewall policy name, e.g. 'Ingress interface to load balancer'
   rule.id: Firewall policy ID
   event.type_id: >-
-    Log type and subtype, e.g. traffic-forward, event-vpn-negotiate, event-vpn-tunnel-stats,
-    event-system, utm-app-ctrl, utm-ssl, utm-ips
+    Log type and subtype, e.g. traffic-forward, traffic-local, event-vpn-negotiate,
+    event-vpn-tunnel-stats, event-system, utm-app-ctrl, utm-ssl, utm-ips
   event.outcome: failure when the logged action failed
   observer.ingress.interface.name: Interface the traffic arrived on
   observer.egress.interface.name: Interface the traffic left by

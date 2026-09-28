@@ -91,7 +91,7 @@ async def test_search_tool_builds_query_from_params_and_fixed_filters(es, window
     assert result.structured_content['events'][0]['event'] == {'user.name': 'john.smith1'}
 
     index, params = es.search.call_args.args[0], es.search.call_args.kwargs
-    assert index == 'ecs-microsoft-windows-v1' and params['size'] == 50 and params['_source'] == ['*']
+    assert index == 'ecs-microsoft-windows-*' and params['size'] == 50 and params['_source'] == ['*']
     assert params['sort'] == [{'@timestamp': {'order': 'asc', 'unmapped_type': 'date'}}]
     clauses = params['query']['bool']['filter']
     assert {'terms': {'event.provider': ['Microsoft-Windows-TerminalServices-Gateway',

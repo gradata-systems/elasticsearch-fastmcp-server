@@ -1,10 +1,15 @@
 name: windows
 title: Microsoft Windows security events
-index: ecs-microsoft-windows-v1
+index: ecs-microsoft-windows-*
 description: >
   Windows event log records, mostly from the Security log, collected from domain controllers
   and servers and stored in Elastic Common Schema. Covers logons and logoffs, special privilege
   assignment, process creation and exit, and Remote Desktop Gateway / RDP connection events.
+  Each event is stored in exactly one retention tier: most events (including failed logons and
+  most logons) are kept only about 2 months (ecs-microsoft-windows-rs-*), while a long-term
+  subset of user-account events goes back years (ecs-microsoft-windows-v1). Searches cover all
+  tiers, so for periods older than about 2 months expect only the long-term subset; an empty
+  result there does not mean nothing happened.
 key_fields:
   user.name: Account logon name in lower case, e.g. 'john.smith1' ('system' is the local system account)
   user.id: Account SID, e.g. 'S-1-5-21-...'
