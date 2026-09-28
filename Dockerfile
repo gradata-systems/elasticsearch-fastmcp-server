@@ -17,6 +17,7 @@ WORKDIR /app
 COPY --from=build /app/.venv /app/.venv
 COPY main.py config.py access_policy.yaml ./
 COPY packs/ packs/
+COPY prompts/ prompts/
 COPY security/ security/
 COPY sources/ sources/
 COPY tools/ tools/

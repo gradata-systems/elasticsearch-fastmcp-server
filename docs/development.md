@@ -9,6 +9,7 @@
 | `tools/generic.py` | The generic tools. |
 | `tools/query.py` | Shared building blocks: time ranges, filters, query building and the response size budget. |
 | `sources/packs.py` | Loading source packs and generating their tools (see [Source packs](source-packs.md)). |
+| `prompts/` | MCP prompts, such as `create_source_pack`. |
 | `security/policy.py` | `access_policy.yaml`: exposed indices and impersonable users. |
 | `security/esql.py` | Extracting the indices an ES\|QL query reads, so they can be checked. |
 | `security/audit.py` | The audit log. |

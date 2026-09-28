@@ -7,6 +7,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
 from config import Settings
+from prompts import source_pack
 from security.audit import AuditMiddleware, configure_audit_log
 from security.policy import AccessPolicy, Caller
 from sources.packs import SourceTool, exposed_packs, load_packs
@@ -54,6 +55,8 @@ async def healthz(request: Request) -> Response:
 
 for tool in generic.ALL_TOOLS:
     mcp.tool(tool)
+for prompt in source_pack.ALL_PROMPTS:
+    mcp.prompt(prompt)
 for pack in packs:
     for spec in pack.tools:
         mcp.add_tool(SourceTool.build(pack, spec))

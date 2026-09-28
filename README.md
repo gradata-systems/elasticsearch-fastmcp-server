@@ -28,6 +28,9 @@ audit trail.
 The included packs add tools for Windows security events, FortiGate firewall logs and
 ingress-nginx access logs. See the [tool guide](docs/tools.md) for arguments and examples.
 
+The `create_source_pack` prompt has an agent write a pack for a new data source with you,
+starting from its index mapping and your use cases (see [Source packs](docs/source-packs.md#generating-a-pack-with-an-agent)).
+
 ## Quick start
 
 ```

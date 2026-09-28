@@ -147,6 +147,57 @@ keeps a subset for years, with each event stored in only one of them. To describ
 For a source that keeps everything indefinitely, leave `retention_days` unset and say so in the
 description.
 
+## Generating a pack with an agent
+
+The server provides an MCP prompt, `create_source_pack`, that has an agent write a pack with you.
+Start it from any MCP client that supports prompts (in many chat clients, type `/` and pick it),
+and give it:
+
+| Argument | Required | What to give |
+|---|---|---|
+| `mapping` | yes | The index mapping or template as JSON: `GET <index>/_mapping` output, a mapping, or an index or component template (`GET _index_template/<name>`). |
+| `use_cases` | no | The questions agents should answer with the data, one per line. If you leave it out, the agent asks for them and suggests some. |
+| `index` | no | The index, alias, data stream or pattern the pack will cover. |
+
+The agent then works through the pack with you:
+
+1. It reads the mapping (multi-fields, aliases, dynamic templates, the timestamp field) and asks
+   for any missing component templates.
+2. If the index is reachable through this server, it looks at real values with `describe_fields`,
+   `top_values` and a small `search_events`.
+3. It agrees the name, index, retention tiers, `retention_days` and description with you.
+4. It proposes key fields, and **asks you about any that are ambiguous**: fields that could mean
+   the same thing, unclear formats or case conventions, codes stored as strings, `text` versus
+   `keyword`, possibly empty fields, and which field is the `event_type_field`. Each question
+   comes with its best guess, so you can confirm or correct it.
+5. It turns each use case into a `search`, `top_values` or `distinct_values` tool. It shows them
+   as a table for you to adjust, and points out use cases that a generic tool already covers.
+6. It writes the YAML, checks it against the pack schema and the rules above, and revises it
+   with you.
+
+The prompt gives the agent the pack schema generated from the server's own validation, one of
+the loaded packs as an example, and the tool names already in use.
+
+**The result is only handed back.** The agent returns the pack as YAML text. Nothing is saved,
+installed or loaded on the server, and the server has no way to do so. Whether the pack is used is
+up to you: add it to your deployment's pack collection and follow
+[Writing a new pack](#writing-a-new-pack) from step 5.
+
+**Example**, with an index template from Elasticsearch:
+
+```
+GET _index_template/ecs-ingress-nginx-access
+```
+
+Then start `create_source_pack` with the response as `mapping`, and with `use_cases`:
+
+```
+Which clients hit one site hardest today?
+Every request one client made, most recent first
+Which URL paths returned server errors this week?
+Which countries did clients come from this year?
+```
+
 ## Writing a new pack
 
 1. Look at the data first. `describe_fields` shows its fields and types. `top_values` on the
