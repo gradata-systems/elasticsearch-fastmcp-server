@@ -19,6 +19,21 @@ def _matches(value: str, patterns: list[str] | frozenset[str]) -> bool:
     return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
 
 
+def matches_index_expression(name: str, expression: str) -> bool:
+    """Whether `name` is selected by a multi-target expression such as 'logs-*,-logs-debug-*,audit'.
+
+    Items apply in order, as in Elasticsearch: an include selects matching names and a '-'
+    exclusion deselects them.
+    """
+    selected = False
+    for part in expression.split(','):
+        if part.startswith('-'):
+            selected = selected and not fnmatch.fnmatchcase(name, part[1:])
+        elif fnmatch.fnmatchcase(name, part):
+            selected = True
+    return selected
+
+
 class AccessPolicy(BaseModel):
     """Server-side limits applied on top of each user's own Elasticsearch privileges."""
 
@@ -53,6 +68,12 @@ class Caller:
     def may_read(self, index: str) -> bool:
         """Whether every comma-separated target is within the exposed patterns.
 
-        This narrows what the server exposes; the user's ES roles remain the security boundary.
+        '-' exclusions only narrow the targets before them, so they need no check of their own, but
+        the expression must start with a target. This narrows what the server exposes; the user's
+        ES roles remain the security boundary.
         """
-        return all(part and _matches(part, self.index_patterns) for part in index.split(','))
+        parts = index.split(',')
+        if parts[0].startswith('-'):
+            return False
+        return all(part[1:] if part.startswith('-') else part and _matches(part, self.index_patterns)
+                   for part in parts)

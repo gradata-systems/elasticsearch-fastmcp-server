@@ -8,6 +8,7 @@ from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
+from security.policy import Caller
 from sources.packs import ParamSpec, SourcePack, SourceTool, ToolSpec, exposed_packs, load_packs
 
 REPO_PACKS = Path(__file__).parent.parent / 'packs'
@@ -57,6 +58,25 @@ def test_packs_outside_exposed_indices_are_skipped():
     packs = [SourcePack(name='a', title='t', description='d', index='ecs-a'),
              SourcePack(name='b', title='t', description='d', index='other')]
     assert [p.name for p in exposed_packs(packs, lambda index: index.startswith('ecs-'))] == ['a']
+
+
+@pytest.mark.parametrize('index', ['a', 'a-*', 'a-*,b', 'a-*,-a-debug-*,b', 'a-*,b,-b-*'])
+def test_pack_index_accepts_multi_target_expressions(index):
+    assert SourcePack(name='p', title='t', description='d', index=index).index == index
+
+
+@pytest.mark.parametrize('index', ['', 'a,', 'a, b', '-a-*', 'a,-a-debug', 'a-*,-', 'remote:a', '<a-{now/d}>',
+                                   'a/b', 'a|b'])
+def test_pack_index_rejects_invalid_expressions(index):
+    with pytest.raises(ValidationError):
+        SourcePack(name='p', title='t', description='d', index=index)
+
+
+def test_multi_target_packs_are_exposed_only_if_every_target_is():
+    caller = Caller('', '', frozenset({'ecs-a-*', 'ecs-b-*'}))
+    packs = [SourcePack(name='both', title='t', description='d', index='ecs-a-*,-ecs-a-rs-*,ecs-b-*'),
+             SourcePack(name='partial', title='t', description='d', index='ecs-a-*,ecs-c-*')]
+    assert [p.name for p in exposed_packs(packs, caller.may_read)] == ['both']
 
 
 def _server(es, packs):

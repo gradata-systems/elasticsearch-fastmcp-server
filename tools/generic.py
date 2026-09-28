@@ -1,16 +1,18 @@
 """Source-agnostic tools that work against any index the caller may read."""
-import fnmatch
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
 from pydantic import Field
 
+from security.policy import matches_index_expression
 from tools.query import Filter, TimeRange, build_query, field_value, fit_to_budget
 from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
 
 Index = Annotated[str, Field(
     description="Index, alias, data stream or pattern from list_data_sources, e.g. 'ecs-microsoft-windows-*'. "
-                "For a known data source, use its 'index' pattern so every retention tier is searched.")]
+                "Comma-separate several targets and prefix one with '-' to exclude it, e.g. "
+                "'ecs-fortios-*,-ecs-fortios-rs-*'. For a known data source, use its 'index' so every "
+                "retention tier is searched.")]
 TimestampField = Annotated[str, Field(description="Timestamp field used for the time range.")]
 Filters = Annotated[list[Filter], Field(description="Exact-match and range conditions, all of which must hold.")]
 QueryString = Annotated[str | None, Field(
@@ -89,7 +91,7 @@ async def list_data_sources(ctx: Context) -> dict[str, Any]:
     }
     readable = set(result['indices']) | set(result['aliases']) | set(result['data_streams'])
     result['sources'] = [pack.summary() for pack in ctx.lifespan_context.get('packs', [])
-                         if any(fnmatch.fnmatchcase(name, pack.index) for name in readable)]
+                         if any(matches_index_expression(name, pack.index) for name in readable)]
     return result
 
 

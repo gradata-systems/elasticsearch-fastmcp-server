@@ -35,6 +35,16 @@ async def test_list_data_sources_excludes_backing_indices_and_describes_readable
                      'key_fields': {'f': 'meaning'}, 'tools': []}]}
 
 
+async def test_list_data_sources_matches_multi_target_pack_indices(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [
+        SourcePack(name='multi', title='M', description='d', index='x-*,-x-debug-*,logs'),
+        SourcePack(name='excluded', title='E', description='d', index='a-*,-a-*')]
+    es.resolve_accessible = AsyncMock(return_value={
+        'indices': [{'name': 'a-1'}, {'name': 'x-debug-1'}], 'aliases': [], 'data_streams': [{'name': 'logs'}]})
+    assert [s['name'] for s in (await generic.list_data_sources(ctx))['sources']] == ['multi']
+
+
 async def test_describe_fields_flattens_types(es, ctx):
     es.field_caps = AsyncMock(return_value={'indices': ['i'], 'fields': {
         '_id': {'_id': {}}, 'user': {'object': {}}, 'user.name': {'keyword': {}},

@@ -13,7 +13,8 @@ import yaml
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_context
 from fastmcp.tools import Tool, ToolResult
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator,
+                      model_validator)
 from pydantic.json_schema import SkipJsonSchema
 
 from tools.generic import run_search, run_top_values
@@ -23,6 +24,8 @@ from utils.elasticsearch import gateway_from
 logger = logging.getLogger(__name__)
 
 _NAME = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
+# Characters Elasticsearch forbids in index names, other than the '*' wildcard.
+_INVALID_INDEX_CHARS = re.compile(r'[\s\\/?"<>|#]')
 
 
 class ParamSpec(BaseModel):
@@ -91,6 +94,23 @@ class SourcePack(BaseModel):
     key_fields: dict[str, str] = {}
     default_fields: list[str] = []
     tools: list[ToolSpec] = []
+
+    @field_validator('index')
+    @classmethod
+    def _index_expression(cls, index: str) -> str:
+        """A multi-target expression: comma-separated names and wildcard patterns, with optional
+        '-' exclusions after a wildcard, e.g. 'logs-*,-logs-debug-*,audit'."""
+        wildcard_seen = False
+        for part in index.split(','):
+            target = part.removeprefix('-')
+            if ':' in target or target.startswith('<'):
+                raise ValueError(f"remote clusters and date math are not supported in pack indices: '{part}'")
+            if not target or _INVALID_INDEX_CHARS.search(target):
+                raise ValueError(f"invalid index target '{part}' in '{index}'")
+            if part.startswith('-') and not wildcard_seen:
+                raise ValueError(f"exclusion '{part}' in '{index}' must follow a wildcard pattern")
+            wildcard_seen = wildcard_seen or '*' in part
+        return index
 
     @classmethod
     def load(cls, path: Path) -> 'SourcePack':

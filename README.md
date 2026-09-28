@@ -49,7 +49,7 @@ built on it. Adding a source is a new YAML file, not new code:
 ```yaml
 name: windows
 title: Microsoft Windows security events
-index: ecs-microsoft-windows-*   # pattern spanning every retention tier
+index: ecs-microsoft-windows-*   # names/patterns, comma-separated; '-' excludes, e.g. 'a-*,-a-debug-*,b'
 description: What the data is, what it's good for, and how far back each tier goes.
 key_fields:                 # shown to the model by list_data_sources
   user.name: Account logon name, e.g. 'john.smith1'
