@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Upper bound on serialized tool output, to protect the model's context window.
     max_response_chars: int = 100_000
     max_time_range_days: int = 90
+    # Longer limit for tools that return counts rather than events (top values, distinct values,
+    # period comparisons, ES|QL with STATS): aggregating a long period is cheap for Elasticsearch.
+    max_aggregation_range_days: int = 366
 
     # Exposed indices and impersonable usernames
     access_policy_file: Path = Path('access_policy.yaml')

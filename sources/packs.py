@@ -1,8 +1,9 @@
 """Source packs: YAML descriptions of a data source and the curated tools built on it.
 
-A pack names an index, explains its key fields for the model, and declares tools as a search
-or top-values query with fixed filters plus a few named parameters. Adding a data source is a
-new YAML file, not new code; the generic tools remain available for anything a pack doesn't cover.
+A pack names an index, explains its key fields for the model, and declares tools as a search,
+top-values or distinct-values query with fixed filters plus a few named parameters. Adding a data
+source is a new YAML file, not new code; the generic tools remain available for anything a pack
+doesn't cover.
 """
 import fnmatch
 import logging
@@ -19,7 +20,7 @@ from pydantic import (BaseModel, ConfigDict, Field, ValidationError, create_mode
 from pydantic.json_schema import SkipJsonSchema
 
 from security.policy import matches_index_expression
-from tools.generic import retention_note, run_search, run_top_values
+from tools.generic import retention_note, run_distinct_values, run_search, run_top_values
 from tools.query import Filter, TimeRange, build_query
 from utils.elasticsearch import gateway_from
 
@@ -58,7 +59,7 @@ class ToolSpec(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     name: str
-    kind: Literal['search', 'top_values']
+    kind: Literal['search', 'top_values', 'distinct_values']
     description: str
     params: dict[str, ParamSpec] = {}
     filters: list[Filter] = []
@@ -67,16 +68,18 @@ class ToolSpec(BaseModel):
     # search
     fields: list[str] | None = Field(default=None, description="Fields to return; defaults to the pack's.")
     sort: Literal['asc', 'desc'] = 'desc'
-    # top_values
+    # top_values and distinct_values
     field: str | None = None
     include_fields: list[str] = []
+    # distinct_values
+    order: Literal['last_seen', 'count', 'value'] = 'last_seen'
 
     @model_validator(mode='after')
     def _check(self) -> 'ToolSpec':
         if not _NAME.match(self.name):
             raise ValueError(f"tool name '{self.name}' must be lower_snake_case")
-        if self.kind == 'top_values' and not self.field:
-            raise ValueError(f"top_values tool '{self.name}' needs 'field'")
+        if self.kind != 'search' and not self.field:
+            raise ValueError(f"{self.kind} tool '{self.name}' needs 'field'")
         if self.kind == 'top_values' and self.size > 100:
             raise ValueError(f"top_values tool '{self.name}' size must be at most 100")
         reserved = {'time_range', 'size'} & set(self.params)
@@ -94,7 +97,10 @@ class SourcePack(BaseModel):
     index: str
     retention_days: int | None = Field(
         default=None, ge=1,
-        description="How many days back every event is kept. Older periods hold only a long-term subset, or nothing.")
+        description="How many days back every event is kept. Older periods hold only a long-term subset, or "
+                    "nothing. Leave unset when nothing ages out.")
+    event_type_field: str | None = Field(
+        default=None, description="Field naming the kind of each event, used by compare_periods by default.")
     timestamp_field: str = '@timestamp'
     key_fields: dict[str, str] = {}
     default_fields: list[str] = []
@@ -141,6 +147,8 @@ class SourcePack(BaseModel):
         }
         if self.retention_days:
             summary['retention_days'] = self.retention_days
+        if self.event_type_field:
+            summary['event_type_field'] = self.event_type_field
         return summary
 
 
@@ -155,6 +163,10 @@ def load_packs(directory: Path) -> list[SourcePack]:
     return packs
 
 
+# Most results a caller may ask a generated tool for, by kind; the generic tools have the same caps.
+_SIZE_LIMITS = {'search': 500, 'top_values': 100, 'distinct_values': 1000}
+
+
 def _arguments_model(pack: SourcePack, spec: ToolSpec) -> type[BaseModel]:
     fields: dict[str, Any] = {}
     for name, param in spec.params.items():
@@ -164,8 +176,8 @@ def _arguments_model(pack: SourcePack, spec: ToolSpec) -> type[BaseModel]:
         else:
             fields[name] = (kind | None, Field(default=None, description=param.description))
     fields['time_range'] = (TimeRange, Field(description="Period to search."))
-    limit = 100 if spec.kind == 'top_values' else 500
-    noun = 'values' if spec.kind == 'top_values' else 'events'
+    limit = _SIZE_LIMITS[spec.kind]
+    noun = 'events' if spec.kind == 'search' else 'values'
     fields['size'] = (int, Field(default=spec.size, ge=1, le=limit, description=f"Maximum number of {noun} to return."))
     return create_model(f'{spec.name}_arguments', __config__=ConfigDict(extra='forbid'), **fields)
 
@@ -195,13 +207,17 @@ class SourceTool(Tool):
 
         extra = [spec.params[name].to_query(getattr(args, name))
                  for name in spec.params if getattr(args, name) is not None]
-        query = build_query(args.time_range, pack.timestamp_field, es.settings.max_time_range_days,
-                            spec.filters, spec.query, extra)
+        # Tools that return counts may cover a longer period than those returning events.
+        max_days = es.settings.max_time_range_days if spec.kind == 'search' else es.settings.max_aggregation_range_days
+        query = build_query(args.time_range, pack.timestamp_field, max_days, spec.filters, spec.query, extra)
         if spec.kind == 'search':
             result = await run_search(es, pack.index, query, spec.fields or pack.default_fields or None,
                                       args.size, spec.sort, pack.timestamp_field)
-        else:
+        elif spec.kind == 'top_values':
             result = await run_top_values(es, pack.index, query, spec.field, args.size, spec.include_fields)
+        else:
+            result = await run_distinct_values(es, pack.index, query, spec.field, args.size, pack.timestamp_field,
+                                               spec.order, spec.include_fields)
         if note := retention_note([pack], pack.index, args.time_range.start):
             result['note'] = note
         return self.convert_result(result)

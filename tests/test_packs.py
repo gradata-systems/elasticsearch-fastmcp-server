@@ -94,7 +94,8 @@ def _server(es, packs):
 @pytest.fixture
 def es():
     gw = MagicMock()
-    gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90)
+    gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
+                                  max_aggregation_range_days=366)
     gw.search = AsyncMock(return_value={'hits': {'total': {'value': 1}, 'hits': [
         {'_index': 'i', '_id': '1', '_source': {'user.name': 'john.smith1'}}]}})
     return gw
@@ -172,7 +173,9 @@ def test_pack_overlaps(windows, index, expected):
 def test_repo_pack_summaries_include_retention_when_set():
     summaries = {p.name: p.summary() for p in load_packs(REPO_PACKS)}
     assert summaries['windows']['retention_days'] == 60 and summaries['fortios']['retention_days'] == 30
-    assert 'retention_days' not in summaries['ingress_nginx']
+    assert 'retention_days' not in summaries['ingress_nginx']  # kept indefinitely
+    assert summaries['windows']['event_type_field'] == 'event.code'
+    assert summaries['fortios']['event_type_field'] == 'event.type_id'
 
 
 async def test_pack_tool_notes_periods_older_than_retention(es, windows):
@@ -184,3 +187,32 @@ async def test_pack_tool_notes_periods_older_than_retention(es, windows):
         fresh = await c.call_tool('windows_user_events', {'user': 'a', 'time_range': {'start': recent}})
     assert 'every event for only 60 days' in stale.structured_content['note']
     assert 'note' not in fresh.structured_content
+
+
+def test_distinct_values_tool_spec_needs_field():
+    with pytest.raises(ValidationError):
+        ToolSpec(name='t', kind='distinct_values', description='d')
+
+
+async def test_distinct_values_tool_lists_logons_over_a_year(es, windows):
+    es.search = AsyncMock(return_value={'aggregations': {'groups': {'buckets': [
+        {'key': {'user.name': 'john.smith1'}, 'doc_count': 3,
+         'first_seen': {'value_as_string': '2026-01-05T00:00:00Z'},
+         'last_seen': {'value_as_string': '2026-09-01T00:00:00Z'},
+         'sample': {'hits': {'hits': [{'_source': {'user': {'id': 'S-1-5-21-1', 'domain': 'intranet'}}}]}}}]}}})
+    async with Client(_server(es, [windows])) as c:
+        result = await c.call_tool('windows_logon_users',
+                                   {'time_range': {'start': '2025-10-01', 'end': '2026-09-28'}})
+    assert result.structured_content['values'] == [
+        {'value': 'john.smith1', 'count': 3, 'first_seen': '2026-01-05T00:00:00Z',
+         'last_seen': '2026-09-01T00:00:00Z', 'sample': {'user.id': 'S-1-5-21-1', 'user.domain': 'intranet'}}]
+    assert 'only 60 days' in result.structured_content['note']
+    clauses = es.search.call_args.kwargs['query']['bool']['filter']
+    assert {'term': {'event.code': '4624'}} in clauses and {'term': {'user.type': 'User'}} in clauses
+
+
+async def test_pack_search_tools_keep_the_event_search_limit(es, windows):
+    async with Client(_server(es, [windows])) as c:
+        with pytest.raises(ToolError, match='maximum of 90 days'):
+            await c.call_tool('windows_user_events',
+                              {'user': 'a', 'time_range': {'start': '2025-10-01', 'end': '2026-09-28'}})

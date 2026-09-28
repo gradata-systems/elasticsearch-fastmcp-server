@@ -95,6 +95,8 @@ spec:
               value: {{ .Values.limits.maxResponseChars | quote }}
             - name: ES_MCP_MAX_TIME_RANGE_DAYS
               value: {{ .Values.limits.maxTimeRangeDays | quote }}
+            - name: ES_MCP_MAX_AGGREGATION_RANGE_DAYS
+              value: {{ .Values.limits.maxAggregationRangeDays | quote }}
             {{- if .Values.accessPolicy }}
             - name: ES_MCP_ACCESS_POLICY_FILE
               value: /etc/es-mcp/config/access_policy.yaml

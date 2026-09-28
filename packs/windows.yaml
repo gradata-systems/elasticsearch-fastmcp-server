@@ -2,6 +2,7 @@ name: windows
 title: Microsoft Windows security events
 index: ecs-microsoft-windows-*
 retention_days: 60
+event_type_field: event.code
 description: >
   Windows event log records, mostly from the Security log, collected from domain controllers
   and servers and stored in Elastic Common Schema. Covers logons and logoffs, special privilege
@@ -50,6 +51,19 @@ tools:
       - {field: user.type, value: User}
     include_fields: [user.id, user.domain]
     size: 50
+
+  - name: windows_logon_users
+    kind: distinct_values
+    description: >
+      Every user account with a successful logon (event 4624) in a period, with its number of
+      logons, first and last logon time, SID and domain, most recent logon first. Use to answer
+      who logged in; unlike windows_active_users it lists every account, not just the busiest.
+    field: user.name
+    filters:
+      - {field: event.code, value: '4624'}
+      - {field: user.type, value: User}
+    include_fields: [user.id, user.domain]
+    size: 500
 
   - name: windows_user_events
     kind: search

@@ -34,11 +34,14 @@ Generic tools work against any index the caller may read, whatever its schema:
 | `describe_fields` | field names and types (field caps), filterable by pattern |
 | `search_events` | events in a time range with exact-match/range filters and an optional Lucene query |
 | `top_values` | most frequent values of a field (terms aggregation) |
+| `distinct_values` | every value of a field, with its count and first/last seen times (composite aggregation) |
 | `compare_periods` | groups (e.g. event types, hosts) whose daily rate stopped, dropped, appeared or rose between two periods |
 | `esql_query` | read-only ES\|QL, with the time range applied as a filter |
 
 Guardrails: every query needs a time range of at most `ES_MCP_MAX_TIME_RANGE_DAYS` (default 90)
-days. Results are capped at `ES_MCP_MAX_RESULT_SIZE` rows and `ES_MCP_MAX_RESPONSE_CHARS`
+days. Tools that return counts rather than events (`top_values`, `distinct_values`, each period of
+`compare_periods`, and ES\|QL queries with `STATS`) allow up to `ES_MCP_MAX_AGGREGATION_RANGE_DAYS`
+(default 366) instead, since aggregating a long period is cheap. Results are capped at `ES_MCP_MAX_RESULT_SIZE` rows and `ES_MCP_MAX_RESPONSE_CHARS`
 characters, with a `truncated` flag and a hint to narrow the query. Leading wildcards are
 rejected in Lucene queries. ES error reasons are returned so the model can correct its query.
 
@@ -51,14 +54,15 @@ built on it. Adding a source is a new YAML file, not new code:
 name: windows
 title: Microsoft Windows security events
 index: ecs-microsoft-windows-*   # names/patterns, comma-separated; '-' excludes, e.g. 'a-*,-a-debug-*,b'
-retention_days: 60          # optional: how far back every event is kept (the shortest tier)
+retention_days: 60          # optional: how far back every event is kept (the shortest tier); unset = forever
+event_type_field: event.code  # optional: what compare_periods groups by when not told otherwise
 description: What the data is, what it's good for, and how far back each tier goes.
 key_fields:                 # shown to the model by list_data_sources
   user.name: Account logon name, e.g. 'john.smith1'
 default_fields: ['@timestamp', user.name, event.code]   # returned by search tools
 tools:
   - name: windows_remote_access_events
-    kind: search            # or top_values (with `field` and optional `include_fields`)
+    kind: search            # or top_values / distinct_values (with `field` and optional `include_fields`)
     description: RDG and RDP connection events for a user, chronologically.
     params:                 # become tool arguments; matched exactly (or by prefix)
       user:

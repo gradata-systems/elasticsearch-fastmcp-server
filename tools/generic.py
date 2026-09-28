@@ -6,6 +6,7 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
+from security.esql import aggregates, source_indices
 from security.policy import matches_index_expression
 from tools.query import Filter, TimeRange, bool_query, build_query, field_value, fit_to_budget
 from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
@@ -23,9 +24,9 @@ QueryString = Annotated[str | None, Field(
 
 _TRUNCATED_HINT = "Output was truncated; narrow the time range, add filters, or request fewer fields."
 
-# compare_periods pages through every group with a composite aggregation, up to this many.
-_COMPARE_PAGE_SIZE = 1000
-_COMPARE_MAX_GROUPS = 10_000
+# distinct_values and compare_periods page through every group with a composite aggregation, up to this many.
+_PAGE_SIZE = 1000
+_MAX_GROUPS = 10_000
 
 
 def retention_note(packs: list[Any], index: str, start: datetime) -> str | None:
@@ -100,6 +101,73 @@ async def run_top_values(es: ElasticsearchGateway, index: str, query: dict[str, 
         result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
                           f"index. Use describe_fields to find the right field.")
     return _with_shard_warning(result, body)
+
+
+async def _composite_buckets(es: ElasticsearchGateway, index: str, query: dict[str, Any],
+                             sources: list[dict[str, Any]], aggs: dict[str, Any]
+                             ) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
+    """Every bucket of a composite aggregation, page by page, up to _MAX_GROUPS.
+
+    Returns the buckets, whether they are all of them, and the first page with a shard failure (or {}).
+    """
+    buckets, failed_page, after_key = [], {}, None
+    while True:
+        composite: dict[str, Any] = {'size': _PAGE_SIZE, 'sources': sources}
+        if after_key:
+            composite['after'] = after_key
+        body = await es.search(index, size=0, query=query, aggs={'groups': {'composite': composite, 'aggs': aggs}})
+        if not failed_page and shard_failure(body):
+            failed_page = body
+        agg = body['aggregations']['groups']
+        buckets += agg['buckets']
+        if not agg['buckets'] or 'after_key' not in agg:
+            return buckets, True, failed_page
+        if len(buckets) >= _MAX_GROUPS:
+            return buckets, False, failed_page
+        after_key = agg['after_key']
+
+
+_DISTINCT_ORDER = {
+    'last_seen': (lambda v: v['last_seen'] or '', True),
+    'count': (lambda v: v['count'], True),
+    'value': (lambda v: str(v['value']), False),
+}
+
+
+async def run_distinct_values(es: ElasticsearchGateway, index: str, query: dict[str, Any], field: str, size: int,
+                              timestamp_field: str, order: str = 'last_seen',
+                              include_fields: list[str] | None = None) -> dict[str, Any]:
+    aggs: dict[str, Any] = {'first_seen': {'min': {'field': timestamp_field}},
+                            'last_seen': {'max': {'field': timestamp_field}}}
+    if include_fields:
+        aggs['sample'] = {'top_hits': {'size': 1, '_source': include_fields}}
+    buckets, complete, failed_page = await _composite_buckets(
+        es, index, query, [{field: {'terms': {'field': field}}}], aggs)
+
+    values = []
+    for bucket in buckets:
+        value = {'value': bucket['key'][field], 'count': bucket['doc_count'],
+                 'first_seen': bucket['first_seen'].get('value_as_string'),
+                 'last_seen': bucket['last_seen'].get('value_as_string')}
+        if include_fields:
+            hits = bucket['sample']['hits']['hits']
+            source = hits[0].get('_source', {}) if hits else {}
+            value['sample'] = {f: field_value(source, f) for f in include_fields}
+        values.append(value)
+    key, reverse = _DISTINCT_ORDER[order]
+    values.sort(key=key, reverse=reverse)
+    rows, truncated = fit_to_budget(values[:size], es.settings.max_response_chars)
+
+    result: dict[str, Any] = {'distinct_values': len(values), 'returned': len(rows), 'values': rows}
+    if not complete:
+        result['distinct_values_complete'] = False
+        result['hint'] = (f"There are more than {len(values)} distinct values and only that many were read; "
+                          f"add filters or narrow the time range for a complete list.")
+    elif truncated or len(rows) < len(values):
+        result['truncated'] = True
+        result['hint'] = ("More values exist than were returned; raise size, add filters or request fewer "
+                          "include_fields.")
+    return _with_shard_warning(result, failed_page)
 
 
 async def list_data_sources(ctx: Context) -> dict[str, Any]:
@@ -193,12 +261,53 @@ async def top_values(
     """
     Return the most frequent values of a field and how many events have each, over a time range.
     Useful for triage: top users, source IPs, event codes, URLs, destination ports and so on.
+    To list every value rather than the most frequent, use distinct_values.
     """
     es = gateway_from(ctx)
     result = await run_top_values(
-        es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
+        es, index, build_query(time_range, timestamp_field, es.settings.max_aggregation_range_days, filters, query),
         field, size, include_fields)
     return _add_retention_note(result, ctx, index, time_range.start)
+
+
+async def distinct_values(
+        index: Index,
+        field: Annotated[str, Field(
+            description="Field to list the values of. Must be keyword, numeric, ip, boolean or date, not text.")],
+        time_range: TimeRange,
+        ctx: Context,
+        filters: Filters = [],
+        query: QueryString = None,
+        order: Annotated[Literal['last_seen', 'count', 'value'], Field(
+            description="'last_seen' for most recently seen first, 'count' for most events first, "
+                        "'value' for alphabetical.")] = 'last_seen',
+        size: Annotated[int, Field(ge=1, le=1000, description="Maximum number of values to return.")] = 200,
+        include_fields: Annotated[list[str] | None, Field(
+            description="Fields to show from one example event per value.")] = None,
+        timestamp_field: TimestampField = '@timestamp',
+) -> dict[str, Any]:
+    """
+    List every distinct value of a field over a time range, with how many events have each and when
+    it was first and last seen, plus the number of distinct values. Unlike top_values, rare values
+    are not left out, so use it for complete answers to questions like "which X occurred in period Y?".
+    """
+    es = gateway_from(ctx)
+    result = await run_distinct_values(
+        es, index, build_query(time_range, timestamp_field, es.settings.max_aggregation_range_days, filters, query),
+        field, size, timestamp_field, order, include_fields)
+    return _add_retention_note(result, ctx, index, time_range.start)
+
+
+def _event_type_group(ctx: Context, index: str) -> list[str]:
+    """The group_by to use when none is given: the event type field of the data source being searched."""
+    fields = sorted({p.event_type_field for p in ctx.lifespan_context.get('packs', [])
+                     if p.event_type_field and p.overlaps(index)})
+    if len(fields) == 1:
+        return fields
+    if fields:
+        raise ToolError(f"The data sources in '{index}' record event types in different fields "
+                        f"({', '.join(fields)}); pass group_by or compare one data source at a time")
+    raise ToolError(f"No known data source in '{index}' defines an event type field; pass group_by")
 
 
 def _days(start: datetime, end: datetime) -> float:
@@ -223,15 +332,16 @@ _WANTED_CHANGES = {'down': {'stopped', 'dropped'}, 'up': {'new', 'increased'},
 
 async def compare_periods(
         index: Index,
-        group_by: Annotated[list[str], Field(
-            min_length=1, max_length=4,
-            description="Keyword, numeric, ip or boolean fields whose values (or combinations of values) "
-                        "are compared, e.g. ['event.code'] or ['event.code', 'host.hostname'].")],
         before: Annotated[TimeRange, Field(description="The baseline period.")],
         after: Annotated[TimeRange, Field(
             description="The period to compare with the baseline, e.g. from date X until now. "
                         "Must start after 'before' ends.")],
         ctx: Context,
+        group_by: Annotated[list[str] | None, Field(
+            min_length=1, max_length=4,
+            description="Keyword, numeric, ip or boolean fields whose values (or combinations of values) "
+                        "are compared, e.g. ['event.code'] or ['event.code', 'host.hostname']. Defaults to "
+                        "the data source's event_type_field (see list_data_sources).")] = None,
         changes: Annotated[Literal['down', 'up', 'both'], Field(
             description="'down' for groups that stopped or dropped, 'up' for groups that are new or "
                         "increased, 'both' for all of them.")] = 'down',
@@ -255,7 +365,8 @@ async def compare_periods(
     the comparison.
     """
     es = gateway_from(ctx)
-    max_days = es.settings.max_time_range_days
+    group_by = group_by or _event_type_group(ctx, index)
+    max_days = es.settings.max_aggregation_range_days
     before_start, before_end = before.bounds(max_days)
     after_start, after_end = after.bounds(max_days)
     if before_end >= after_start:
@@ -269,25 +380,10 @@ async def compare_periods(
 
     either_period = {'bool': {'should': [before_range, after_range], 'minimum_should_match': 1}}
     search_query = bool_query([either_period], filters, query)
-    sources = [{f: {'terms': {'field': f}}} for f in group_by]
-    groups, failed_page, complete, after_key = [], {}, True, None
-    while True:
-        composite: dict[str, Any] = {'size': _COMPARE_PAGE_SIZE, 'sources': sources}
-        if after_key:
-            composite['after'] = after_key
-        aggs = {'groups': {'composite': composite,
-                           'aggs': {'before': {'filter': before_range}, 'after': {'filter': after_range}}}}
-        body = await es.search(index, size=0, query=search_query, aggs=aggs)
-        if not failed_page and shard_failure(body):
-            failed_page = body
-        agg = body['aggregations']['groups']
-        groups += [(b['key'], b['before']['doc_count'], b['after']['doc_count']) for b in agg['buckets']]
-        if not agg['buckets'] or 'after_key' not in agg:
-            break
-        if len(groups) >= _COMPARE_MAX_GROUPS:
-            complete = False
-            break
-        after_key = agg['after_key']
+    buckets, complete, failed_page = await _composite_buckets(
+        es, index, search_query, [{f: {'terms': {'field': f}}} for f in group_by],
+        {'before': {'filter': before_range}, 'after': {'filter': after_range}})
+    groups = [(b['key'], b['before']['doc_count'], b['after']['doc_count']) for b in buckets]
 
     changed = []
     for key, before_count, after_count in groups:
@@ -312,6 +408,7 @@ async def compare_periods(
 
     before_total, after_total = sum(g[1] for g in groups), sum(g[2] for g in groups)
     result: dict[str, Any] = {
+        'group_by': group_by,
         'before_days': round(before_days, 2), 'after_days': round(after_days, 2),
         'before_events': before_total, 'after_events': after_total,
         'groups_compared': len(groups), 'groups_changed': len(changed),
@@ -348,11 +445,11 @@ async def esql_query(
     Run a read-only ES|QL query for analysis the other tools can't express: grouping by several fields,
     computed columns, joins between conditions, time bucketing (BUCKET) and so on.
     The time range is applied automatically; don't repeat it in the query. Always end with LIMIT,
-    and prefer STATS over returning raw rows.
+    and prefer STATS over returning raw rows; queries with STATS may also cover a longer time range.
     """
     es = gateway_from(ctx)
-    time_filter = time_range.to_query(timestamp_field, es.settings.max_time_range_days)
-    body = await es.esql(query, time_filter)
+    max_days = es.settings.max_aggregation_range_days if aggregates(query) else es.settings.max_time_range_days
+    body = await es.esql(query, time_range.to_query(timestamp_field, max_days))
 
     columns = [c['name'] for c in body.get('columns', [])]
     rows = [dict(zip(columns, values)) for values in body.get('values', [])]
@@ -362,7 +459,9 @@ async def esql_query(
     if truncated or len(limited) < len(rows):
         result['truncated'] = True
         result['hint'] = "Output was truncated; add STATS to aggregate or a smaller LIMIT."
-    return result
+    # The gateway parsed the query's indices before running it, so this can't fail here.
+    return _add_retention_note(result, ctx, ','.join(source_indices(query)), time_range.start)
 
 
-ALL_TOOLS = [list_data_sources, describe_fields, search_events, top_values, compare_periods, esql_query]
+ALL_TOOLS = [list_data_sources, describe_fields, search_events, top_values, distinct_values, compare_periods,
+             esql_query]

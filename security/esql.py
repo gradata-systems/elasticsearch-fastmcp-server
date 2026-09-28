@@ -8,6 +8,9 @@ import re
 _LEADING_COMMENTS = re.compile(r'^(?:\s+|//[^\n]*\n|/\*.*?\*/)*', re.DOTALL)
 _SOURCE = re.compile(r'^(FROM|TS)\s+(.*?)(?=\s+METADATA\b|\||$)', re.IGNORECASE | re.DOTALL)
 _LOOKUP_JOIN = re.compile(r'\bLOOKUP\s+JOIN\s+([^\s|]+)', re.IGNORECASE)
+_STRING_LITERAL = re.compile(r'"""(?:.|\n)*?"""|"(?:[^"\\\n]|\\.)*"')
+# STATS as a command of its own; INLINE STATS keeps every row, so it doesn't count.
+_STATS = re.compile(r'\|\s*STATS\b', re.IGNORECASE)
 
 
 class UnsupportedQuery(ValueError):
@@ -30,3 +33,11 @@ def source_indices(query: str) -> list[str]:
     if not source:
         raise UnsupportedQuery("ES|QL queries must start with FROM")
     return _index_names(source.group(2)) + [m.strip('"`') for m in _LOOKUP_JOIN.findall(body)]
+
+
+def aggregates(query: str) -> bool:
+    """Whether `query` has a STATS command, so it returns counts rather than events.
+
+    Only widens the allowed time range; results are capped at the same number of rows either way.
+    """
+    return bool(_STATS.search(_STRING_LITERAL.sub('""', query)))

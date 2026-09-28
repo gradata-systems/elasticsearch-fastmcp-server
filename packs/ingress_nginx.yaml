@@ -5,7 +5,8 @@ description: >
   HTTP access logs from the Kubernetes ingress-nginx controller: one event per request to a
   published web application, with client address and geolocation, requested URL, method,
   response status and size, and user agent. Requests to healthcheck.apps.gradata.com.au are
-  synthetic health checks and usually worth excluding.
+  synthetic health checks and usually worth excluding. Every request is kept indefinitely, so
+  older periods are as complete as recent ones.
 key_fields:
   source.ip: Client IP address
   source.geo.country_iso_code: Client country, e.g. 'AU'

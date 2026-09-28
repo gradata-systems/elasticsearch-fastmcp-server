@@ -13,7 +13,8 @@ TR = TimeRange(start='2026-09-01', end='2026-09-02')
 @pytest.fixture
 def es():
     gw = MagicMock()
-    gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90)
+    gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
+                                  max_aggregation_range_days=366)
     return gw
 
 
@@ -152,7 +153,7 @@ async def test_compare_periods_pages_through_groups_and_ranks_drops(es, ctx):
         _groups_page([({'event.code': '4688'}, 200, 20), ({'event.code': '4634'}, 3, 0),
                       ({'event.code': '4672'}, 0, 40)]),
     ])
-    result = await generic.compare_periods('i', ['event.code'], BEFORE, AFTER, ctx)
+    result = await generic.compare_periods('i', BEFORE, AFTER, ctx, group_by=['event.code'])
 
     assert [(c['group']['event.code'], c['status']) for c in result['changes']] == [
         ('4624', 'stopped'), ('4688', 'dropped')]
@@ -174,25 +175,25 @@ async def test_compare_periods_pages_through_groups_and_ranks_drops(es, ctx):
 async def test_compare_periods_reports_increases_when_asked(es, ctx):
     es.search = AsyncMock(return_value=_groups_page([
         ({'h': 'a'}, 100, 0), ({'h': 'b'}, 0, 40), ({'h': 'c'}, 10, 50), ({'h': 'd'}, 10, 5)]))
-    result = await generic.compare_periods('i', ['h'], BEFORE, AFTER, ctx, changes='up')
+    result = await generic.compare_periods('i', BEFORE, AFTER, ctx, ['h'], changes='up')
     assert [(c['group']['h'], c['status'], c['change_percent']) for c in result['changes']] == [
         ('c', 'increased', 900), ('b', 'new', None)]
 
 
 async def test_compare_periods_checks_each_period_separately(es, ctx):
     es.search = AsyncMock(return_value=_groups_page([]))
-    # 1.5 years apart but each period is within the limit.
-    await generic.compare_periods('i', ['h'], TimeRange(start='2025-03-01', end='2025-03-31'), AFTER, ctx)
-    with pytest.raises(ToolError, match='maximum of 90 days'):
-        await generic.compare_periods('i', ['h'], TimeRange(start='2025-01-01', end='2025-12-31'), AFTER, ctx)
+    # Over a year apart, and longer than the event search limit, but each within the aggregation limit.
+    await generic.compare_periods('i', TimeRange(start='2025-01-01', end='2025-06-30'), AFTER, ctx, ['h'])
+    with pytest.raises(ToolError, match='maximum of 366 days'):
+        await generic.compare_periods('i', TimeRange(start='2024-01-01', end='2025-06-30'), AFTER, ctx, ['h'])
     with pytest.raises(ToolError, match='must end before'):
-        await generic.compare_periods('i', ['h'], BEFORE, TimeRange(start='2026-08-05'), ctx)
+        await generic.compare_periods('i', BEFORE, TimeRange(start='2026-08-05'), ctx, ['h'])
 
 
 async def test_compare_periods_notes_empty_baseline_and_group_cap(es, ctx, monkeypatch):
-    monkeypatch.setattr(generic, '_COMPARE_MAX_GROUPS', 2)
+    monkeypatch.setattr(generic, '_MAX_GROUPS', 2)
     es.search = AsyncMock(return_value=_groups_page([({'h': 'a'}, 0, 10), ({'h': 'b'}, 0, 10)], after_key={'h': 'b'}))
-    result = await generic.compare_periods('i', ['h'], BEFORE, AFTER, ctx)
+    result = await generic.compare_periods('i', BEFORE, AFTER, ctx, ['h'])
     assert es.search.await_count == 1
     assert 'first 2 groups' in result['note'] and 'not be kept that far back' in result['note']
 
@@ -221,5 +222,74 @@ async def test_compare_periods_warns_when_baseline_predates_retention(es, ctx):
                                                 retention_days=60)]
     es.search = AsyncMock(return_value=_groups_page([({'h': 'a'}, 10, 10)]))
     result = await generic.compare_periods(
-        'win-*', ['h'], TimeRange(start=_days_ago(80), end=_days_ago(31)), TimeRange(start=_days_ago(30)), ctx)
+        'win-*', TimeRange(start=_days_ago(80), end=_days_ago(31)), TimeRange(start=_days_ago(30)), ctx, ['h'])
     assert 'only 60 days' in result['note'] and 'baseline is incomplete' in result['note']
+
+
+def _distinct_page(buckets, after_key=None):
+    agg = {'buckets': [{'key': {'user.name': name}, 'doc_count': count,
+                        'first_seen': {'value': 1, 'value_as_string': first},
+                        'last_seen': {'value': 2, 'value_as_string': last}} for name, count, first, last in buckets]}
+    if after_key:
+        agg['after_key'] = after_key
+    return {'aggregations': {'groups': agg}}
+
+
+async def test_distinct_values_lists_every_value_across_pages(es, ctx):
+    es.search = AsyncMock(side_effect=[
+        _distinct_page([('alice', 5, '2026-01-02T00:00:00Z', '2026-03-01T00:00:00Z'),
+                        ('bob', 1, '2026-02-01T00:00:00Z', '2026-09-01T00:00:00Z')], after_key={'user.name': 'bob'}),
+        _distinct_page([('carol', 9, '2026-01-01T00:00:00Z', '2026-05-01T00:00:00Z')]),
+    ])
+    # A year: past the event search limit but within the aggregation limit.
+    result = await generic.distinct_values('i', 'user.name', TimeRange(start='2025-10-01', end='2026-09-28'), ctx)
+    assert result['distinct_values'] == 3
+    assert [v['value'] for v in result['values']] == ['bob', 'carol', 'alice']  # most recently seen first
+    assert result['values'][0] == {'value': 'bob', 'count': 1, 'first_seen': '2026-02-01T00:00:00Z',
+                                   'last_seen': '2026-09-01T00:00:00Z'}
+    first, second = (call.kwargs for call in es.search.call_args_list)
+    assert first['aggs']['groups']['composite']['sources'] == [{'user.name': {'terms': {'field': 'user.name'}}}]
+    assert first['aggs']['groups']['aggs']['last_seen'] == {'max': {'field': '@timestamp'}}
+    assert second['aggs']['groups']['composite']['after'] == {'user.name': 'bob'}
+
+
+async def test_distinct_values_orders_and_flags_incomplete_lists(es, ctx, monkeypatch):
+    monkeypatch.setattr(generic, '_MAX_GROUPS', 2)
+    es.search = AsyncMock(return_value=_distinct_page(
+        [('alice', 5, None, None), ('bob', 9, None, None)], after_key={'user.name': 'bob'}))
+    result = await generic.distinct_values('i', 'user.name', TR, ctx, order='count', size=1)
+    assert [v['value'] for v in result['values']] == ['bob']
+    assert result['distinct_values_complete'] is False and 'more than 2' in result['hint']
+
+
+async def test_compare_periods_defaults_to_the_sources_event_type_field(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [
+        SourcePack(name='w', title='W', description='d', index='win-*', event_type_field='event.code'),
+        SourcePack(name='f', title='F', description='d', index='fw-*', event_type_field='event.type_id'),
+        SourcePack(name='n', title='N', description='d', index='web-*')]
+    es.search = AsyncMock(return_value=_groups_page([]))
+
+    result = await generic.compare_periods('win-*', BEFORE, AFTER, ctx)
+    assert result['group_by'] == ['event.code']
+    assert es.search.call_args.kwargs['aggs']['groups']['composite']['sources'] == [
+        {'event.code': {'terms': {'field': 'event.code'}}}]
+    with pytest.raises(ToolError, match='different fields'):
+        await generic.compare_periods('win-*,fw-*', BEFORE, AFTER, ctx)
+    with pytest.raises(ToolError, match='pass group_by'):
+        await generic.compare_periods('web-*', BEFORE, AFTER, ctx)
+
+
+async def test_esql_with_stats_allows_the_aggregation_range_and_notes_retention(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [SourcePack(name='w', title='Windows', description='d', index='win-*',
+                                                retention_days=60)]
+    es.esql = AsyncMock(return_value={'columns': [{'name': 'n'}], 'values': [[1]]})
+    year = TimeRange(start=_days_ago(300))
+
+    result = await generic.esql_query('FROM win-* | STATS n = COUNT(*)', year, ctx)
+    assert 'only 60 days' in result['note']
+    with pytest.raises(ToolError, match='maximum of 90 days'):
+        await generic.esql_query('FROM win-* | WHERE message == "| STATS" | LIMIT 5', year, ctx)
+    with pytest.raises(ToolError, match='maximum of 90 days'):
+        await generic.esql_query('FROM win-* | INLINE STATS n = COUNT(*) | LIMIT 5', year, ctx)

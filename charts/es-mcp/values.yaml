@@ -45,6 +45,7 @@ limits:
   maxResultSize: 500
   maxResponseChars: 100000
   maxTimeRangeDays: 90
+  maxAggregationRangeDays: 366
 
 # Replaces the image's access_policy.yaml when set, e.g.
 #   exposed_indices: [ecs-microsoft-windows-*, ecs-fortios-*]
