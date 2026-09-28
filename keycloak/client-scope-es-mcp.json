@@ -1,0 +1,37 @@
+{
+  "name": "es-mcp",
+  "description": "Access to the Elasticsearch MCP server: adds the es-mcp audience and the username claim it authorizes by",
+  "protocol": "openid-connect",
+  "attributes": {
+    "include.in.token.scope": "true",
+    "display.on.consent.screen": "true",
+    "consent.screen.text": "Query Elasticsearch with your own permissions"
+  },
+  "protocolMappers": [
+    {
+      "name": "es-mcp audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.custom.audience": "es-mcp",
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "introspection.token.claim": "true"
+      }
+    },
+    {
+      "name": "username",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-usermodel-attribute-mapper",
+      "config": {
+        "user.attribute": "username",
+        "claim.name": "preferred_username",
+        "jsonType.label": "String",
+        "access.token.claim": "true",
+        "id.token.claim": "true",
+        "introspection.token.claim": "true",
+        "userinfo.token.claim": "true"
+      }
+    }
+  ]
+}

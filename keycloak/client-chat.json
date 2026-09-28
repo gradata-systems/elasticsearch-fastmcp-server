@@ -1,0 +1,24 @@
+{
+  "clientId": "openwebui",
+  "name": "OpenWebUI",
+  "description": "Chat client calling the Elasticsearch MCP server on behalf of the signed-in user",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": false,
+  "frontchannelLogout": true,
+  "redirectUris": ["https://openwebui.example.com/REPLACE-WITH-CALLBACK-PATH"],
+  "webOrigins": ["+"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "+",
+    "use.refresh.tokens": "true",
+    "client.use.lightweight.access.token.enabled": "false"
+  },
+  "defaultClientScopes": ["basic", "profile", "roles", "es-mcp"],
+  "optionalClientScopes": []
+}

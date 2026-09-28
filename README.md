@@ -104,16 +104,50 @@ that is never used; don't disable the user, since disabled users can't be run as
 ## Keycloak setup (26.5)
 
 FastMCP's Keycloak integration needs Keycloak 26.6+ for MCP clients to register themselves
-dynamically, so on 26.5 **register each client in Keycloak up front**:
+dynamically, so on 26.5 **register each client in Keycloak up front**. `keycloak/` holds importable
+definitions, tested against Keycloak 26.5:
 
-- **Usernames must not be user-editable.** Access is decided by `preferred_username`; if users
-  can rename themselves they can impersonate others. Keep the realm's *Edit username* off, or
-  source usernames read-only from LDAP/AD.
-- **Audience**: add an *Audience* mapper (included client audience `es-mcp`) to a client scope
-  used by the calling clients. Tokens without `aud: es-mcp` are rejected.
-- **OpenWebUI / chat clients**: confidential or public client using authorization code + PKCE.
-- **LangGraph / automation agents**: one confidential client per agent with *Service accounts*
-  enabled (client-credentials grant), plus the matching ES user described above.
+| file | what it is |
+|---|---|
+| `client-scope-es-mcp.json` | `es-mcp` client scope: adds `aud: es-mcp` and the `preferred_username` claim |
+| `client-chat.json` | template for OpenWebUI and other chat clients: authorization code + PKCE (S256) |
+| `client-agent.json` | template for one automation agent: client credentials via a service account |
+
+A token is accepted only when it is issued by `ES_MCP_KEYCLOAK_REALM_URL` (the `iss` claim must
+match exactly, so use the realm's public URL), has `aud: es-mcp`, carries `openid` in its `scope`,
+and names an impersonable user in `preferred_username`.
+
+**1. Create the client scope and clients** (`kcadm.sh` ships in the Keycloak image; the admin
+console's *Clients → Import client* also accepts the two client files, but client scopes must be
+created first and have no import button):
+
+```
+kcadm.sh config credentials --server https://keycloak.example.com --realm master --user admin
+kcadm.sh create client-scopes -r security -f keycloak/client-scope-es-mcp.json
+kcadm.sh create clients -r security -f keycloak/client-chat.json    # edit clientId and redirectUris first
+kcadm.sh create clients -r security -f keycloak/client-agent.json   # one per agent; edit clientId
+```
+
+For an existing client, add `es-mcp` as a **default** client scope instead (*Clients → client →
+Client scopes → Add client scope*). A token without it has no `es-mcp` audience and no username,
+and is rejected.
+
+**2. Chat clients.** Replace the placeholder in `redirectUris` with the exact callback URL the
+client shows when you configure the MCP server's OAuth settings. Keep it confidential with PKCE;
+set `publicClient: true` only for clients that can't keep a secret. Users sign in as themselves, so
+`preferred_username` is their account name, e.g. `john.smith1`.
+
+**3. Agents.** Each agent's service account is named `service-account-<clientId>`, e.g.
+`service-account-langgraph-triage`; create the matching Elasticsearch user described in
+*Elasticsearch setup*. Agents must request the `openid` scope, or the server rejects the token:
+
+```
+curl https://keycloak.example.com/realms/security/protocol/openid-connect/token   -d grant_type=client_credentials -d client_id=langgraph-triage -d client_secret=... -d scope=openid
+```
+
+**4. Lock down usernames.** Access is decided by `preferred_username`; if users can rename
+themselves they can impersonate others. Keep the realm's *Edit username* off
+(`editUsernameAllowed: false`), or source usernames read-only from LDAP/AD.
 
 ## Audit log
 

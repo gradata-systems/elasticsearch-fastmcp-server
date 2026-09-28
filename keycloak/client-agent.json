@@ -1,0 +1,19 @@
+{
+  "clientId": "langgraph-triage",
+  "name": "LangGraph triage agent",
+  "description": "Automation agent; queries Elasticsearch as ES user service-account-langgraph-triage",
+  "enabled": true,
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": false,
+  "implicitFlowEnabled": false,
+  "directAccessGrantsEnabled": false,
+  "serviceAccountsEnabled": true,
+  "attributes": {
+    "client_credentials.use_refresh_token": "false",
+    "client.use.lightweight.access.token.enabled": "false"
+  },
+  "defaultClientScopes": ["basic", "es-mcp"],
+  "optionalClientScopes": []
+}
