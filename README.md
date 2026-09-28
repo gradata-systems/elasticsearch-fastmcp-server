@@ -18,6 +18,25 @@ investigations, with OAuth2 (Keycloak) authentication, per-role index access and
 Only index-level control is possible on a Basic license, since document- and field-level
 security need Platinum.
 
+## Tools
+
+Generic tools work against any index the caller may read, whatever its schema:
+
+| tool | purpose |
+|---|---|
+| `list_data_sources` | indices, aliases and data streams the caller can read |
+| `describe_fields` | field names and types (field caps), filterable by pattern |
+| `search_events` | events in a time range with exact-match/range filters and an optional Lucene query |
+| `top_values` | most frequent values of a field (terms aggregation) |
+| `esql_query` | read-only ES\|QL, with the time range applied as a filter |
+
+Guardrails: every query needs a time range of at most `ES_MCP_MAX_TIME_RANGE_DAYS` (default 90)
+days. Results are capped at `ES_MCP_MAX_RESULT_SIZE` rows and `ES_MCP_MAX_RESPONSE_CHARS`
+characters, with a `truncated` flag and a hint to narrow the query. Leading wildcards are
+rejected in Lucene queries. ES error reasons are returned so the model can correct its query.
+
+The `get_windows_*` tools are source-specific shortcuts for Windows ECS data.
+
 ## Elasticsearch setup
 
 Create a role and a native user for the broker. The broker must be a native user, not an API
@@ -61,11 +80,11 @@ feature. Ship it somewhere the investigated users can't modify.
 | event | when | key fields |
 |---|---|---|
 | `tool_call` | every tool invocation | `tool`, `arguments`, `outcome`, `error`, `duration_ms` |
-| `es_search` | every ES query | `index`, `request`, `hits_returned`, `hits_total`, `took_ms`, `outcome` |
+| `es_request` | every ES request | `api` (search, esql, field_caps, resolve_index), `index`, `request`, `outcome`, result counts, `took_ms` |
 | `access_denied` | unauthenticated, index not in policy, or ES 403 | `reason`, `index`, `roles` |
 
 Every event carries `ts`, `sub`, `username`, `client_id` and a `call_id` that links a
-`tool_call` to its `es_search` events. ES requests also carry `X-Opaque-Id: mcp:<sub>`, so they
+`tool_call` to its `es_request` events. ES requests also carry `X-Opaque-Id: mcp:<sub>`, so they
 show up in ES slow logs and the tasks API.
 
 ## Running

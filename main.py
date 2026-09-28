@@ -10,7 +10,8 @@ from resources.windows_events import DateRange, get_users, get_top_events_by_use
     get_remote_access_events_by_user
 from security.audit import AuditMiddleware, configure_audit_log
 from security.policy import RbacPolicy
-from utils.elasticsearch import ElasticsearchGateway
+from tools import generic
+from utils.elasticsearch import ElasticsearchGateway, gateway_from
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +40,8 @@ mcp = FastMCP(
     middleware=[AuditMiddleware()],
 )
 
-
-def _es(ctx: Context) -> ElasticsearchGateway:
-    return ctx.lifespan_context['es']
+for tool in generic.ALL_TOOLS:
+    mcp.tool(tool)
 
 
 @mcp.tool
@@ -51,7 +51,7 @@ async def get_windows_event_users(date_range: DateRange, ctx: Context) -> dict[s
     :param date_range: Period for which to return events
     :return: List of user accounts featuring in events within the specified date range
     """
-    return await get_users(_es(ctx), settings.es_windows_index, date_range)
+    return await get_users(gateway_from(ctx), settings.es_windows_index, date_range)
 
 
 @mcp.tool
@@ -63,7 +63,7 @@ async def get_windows_events_by_user(user: str, size: int, date_range: DateRange
     :param date_range: The time period (start and end dates) to filter events. Dates should be in YYYY-MM-DD format.
     :return: Windows events in Elastic Common Schema JSON format
     """
-    return await get_top_events_by_user(_es(ctx), settings.es_windows_index, user, size, date_range)
+    return await get_top_events_by_user(gateway_from(ctx), settings.es_windows_index, user, size, date_range)
 
 
 @mcp.tool
@@ -76,7 +76,7 @@ async def get_windows_remote_access_events_by_user(user: str, size: int, date_ra
     :param date_range: The time period (start and end dates) to filter events in YYYY-MM-DD format.
     :return: Windows events in Elastic Common Schema JSON format
     """
-    return await get_remote_access_events_by_user(_es(ctx), settings.es_windows_index, user, size, date_range)
+    return await get_remote_access_events_by_user(gateway_from(ctx), settings.es_windows_index, user, size, date_range)
 
 
 if __name__ == '__main__':

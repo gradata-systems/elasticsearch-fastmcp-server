@@ -1,7 +1,8 @@
 import logging
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from elasticsearch import ApiError, AsyncElasticsearch, AuthorizationException, TransportError
+from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
@@ -13,6 +14,25 @@ from security.policy import Caller, RbacPolicy, roles_from_claims
 logger = logging.getLogger(__name__)
 
 
+def gateway_from(ctx: Context) -> 'ElasticsearchGateway':
+    return ctx.lifespan_context['es']
+
+
+def _error_reason(e: ApiError) -> str:
+    error = e.body.get('error') if isinstance(e.body, dict) else None
+    if not isinstance(error, dict):
+        return str(e)
+    root = (error.get('root_cause') or [error])[0]
+    reason = root.get('reason') or error.get('reason') or str(e)
+    caused_by = (error.get('caused_by') or {}).get('reason')
+    return f"{reason}: {caused_by}" if caused_by and caused_by != reason else reason
+
+
+def _hits_summary(body: dict[str, Any]) -> dict[str, Any]:
+    hits = body.get('hits', {})
+    return {'took_ms': body.get('took'), 'hits_returned': len(hits.get('hits', [])), 'hits_total': hits.get('total')}
+
+
 class ElasticsearchGateway:
     """Runs Elasticsearch requests on behalf of the authenticated MCP caller.
 
@@ -21,7 +41,7 @@ class ElasticsearchGateway:
     """
 
     def __init__(self, settings: Settings, policy: RbacPolicy):
-        self._settings = settings
+        self.settings = settings
         self._policy = policy
         self._client = AsyncElasticsearch(
             settings.es_url,
@@ -40,34 +60,76 @@ class ElasticsearchGateway:
         if token is None or not token.subject:
             audit('access_denied', reason='unauthenticated')
             raise ToolError("Not authenticated")
-        roles = roles_from_claims(token.claims or {}, self._settings.keycloak_roles_client_id)
+        roles = roles_from_claims(token.claims or {}, self.settings.keycloak_roles_client_id)
         return Caller(token.subject, roles, self._policy.index_patterns_for(roles))
 
-    async def search(self, index: str, **params: Any) -> dict[str, Any]:
+    async def _execute(
+        self,
+        api: str,
+        index: str | None,
+        request: dict[str, Any],
+        call: Callable[[AsyncElasticsearch], Awaitable[Any]],
+        summarize: Callable[[dict[str, Any]], dict[str, Any]] = lambda body: {},
+    ) -> dict[str, Any]:
+        """Run `call` with the caller's scoped client, auditing the outcome.
+
+        `index` is checked against the caller's policy first when given; requests whose
+        target can't be checked up front (ES|QL) rely on Elasticsearch alone.
+        """
         caller = self.current_caller()
-        who = {'roles': sorted(caller.roles), 'index': index}
-        if not caller.may_read(index):
+        who = {'api': api, 'roles': sorted(caller.roles), 'index': index}
+        if not caller.index_patterns:
+            audit('access_denied', reason='no_mapped_roles', **who)
+            raise ToolError("Your roles do not grant access to any data")
+        if index is not None and not caller.may_read(index):
             audit('access_denied', reason='index_not_in_policy', **who)
             raise ToolError(f"Access to index '{index}' is not permitted for your roles")
 
-        if 'size' in params:
-            params['size'] = max(0, min(params['size'], self._settings.max_result_size))
-
         api_key = await self._broker.key_for(caller.index_patterns)
         client = self._client.options(api_key=api_key, opaque_id=f'mcp:{caller.subject}')
-        logger.debug("Search on %s: %s", index, params)
+        logger.debug("%s on %s: %s", api, index, request)
         try:
-            response = await client.search(index=index, **params)
+            response = await call(client)
         except AuthorizationException as e:
-            audit('access_denied', reason='elasticsearch_403', request=params, **who)
-            raise ToolError(f"Elasticsearch denied access to index '{index}'") from e
-        except (ApiError, TransportError) as e:
-            logger.exception("Elasticsearch search on %s failed", index)
-            audit('es_search', outcome='error', error=str(e), request=params, **who)
-            raise ToolError(f"Elasticsearch query failed: {e}") from e
+            audit('access_denied', reason='elasticsearch_403', request=request, **who)
+            raise ToolError("Elasticsearch denied access to the requested data") from e
+        except ApiError as e:
+            reason = _error_reason(e)
+            audit('es_request', outcome='error', error=reason, request=request, **who)
+            raise ToolError(f"Elasticsearch rejected the request: {reason}") from e
+        except TransportError as e:
+            logger.exception("Elasticsearch %s on %s failed", api, index)
+            audit('es_request', outcome='error', error=str(e), request=request, **who)
+            raise ToolError("Elasticsearch is unavailable") from e
 
         body = response.body
-        audit('es_search', outcome='success', request=params, took_ms=body.get('took'),
-              hits_returned=len(body.get('hits', {}).get('hits', [])),
-              hits_total=body.get('hits', {}).get('total'), **who)
+        audit('es_request', outcome='success', request=request, **summarize(body), **who)
         return body
+
+    async def search(self, index: str, **params: Any) -> dict[str, Any]:
+        if 'size' in params:
+            params['size'] = max(0, min(params['size'], self.settings.max_result_size))
+        return await self._execute('search', index, params,
+                                   lambda c: c.search(index=index, **params), _hits_summary)
+
+    async def field_caps(self, index: str, fields: str) -> dict[str, Any]:
+        return await self._execute('field_caps', index, {'fields': fields},
+                                   lambda c: c.field_caps(index=index, fields=fields),
+                                   lambda body: {'fields_returned': len(body.get('fields', {}))})
+
+    async def resolve_accessible(self) -> dict[str, Any]:
+        """Indices, aliases and data streams matching the caller's policy patterns.
+
+        Wildcards are resolved by Elasticsearch under the caller's scoped key, so only
+        targets the caller can actually read are returned.
+        """
+        caller = self.current_caller()
+        names = sorted(caller.index_patterns)
+        return await self._execute('resolve_index', None, {'names': names},
+                                   lambda c: c.indices.resolve_index(name=names, ignore_unavailable=True,
+                                                                     allow_no_indices=True))
+
+    async def esql(self, query: str, filter: dict[str, Any]) -> dict[str, Any]:
+        return await self._execute('esql', None, {'query': query, 'filter': filter},
+                                   lambda c: c.esql.query(query=query, filter=filter),
+                                   lambda body: {'took_ms': body.get('took'), 'rows': len(body.get('values', []))})

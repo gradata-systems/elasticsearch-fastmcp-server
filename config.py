@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     es_request_timeout: float = 30.0
     es_windows_index: str = 'ecs-microsoft-windows-v1'
     max_result_size: int = 500
+    # Upper bound on serialized tool output, to protect the model's context window.
+    max_response_chars: int = 100_000
+    max_time_range_days: int = 90
 
     # RBAC
     rbac_policy_file: Path = Path('rbac.yaml')

@@ -51,7 +51,7 @@ async def test_index_outside_policy_is_rejected_before_es(gateway):
         with pytest.raises(ToolError, match='not permitted'):
             await gateway.search('ecs-nginx-v1', size=10)
     gateway._client.options.assert_not_called()
-    audit.assert_called_once_with('access_denied', reason='index_not_in_policy', roles=['helpdesk'],
+    audit.assert_called_once_with('access_denied', reason='index_not_in_policy', api='search', roles=['helpdesk'],
                                   index='ecs-nginx-v1')
 
 
@@ -67,10 +67,38 @@ async def test_search_uses_scoped_key_and_caps_size(gateway):
         with patch('utils.elasticsearch.audit') as audit:
             await gateway.search('ecs-microsoft-windows-v1', size=10_000, query={'match_all': {}})
         event, fields = audit.call_args.args[0], audit.call_args.kwargs
-        assert event == 'es_search' and fields['outcome'] == 'success'
+        assert event == 'es_request' and fields['api'] == 'search' and fields['outcome'] == 'success'
         assert fields['request'] == {'size': 100, 'query': {'match_all': {}}}
 
     gateway._broker.key_for.assert_awaited_once_with(frozenset({'ecs-microsoft-windows-*'}))
     gateway._client.options.assert_called_once_with(api_key='scoped-key', opaque_id='mcp:alice')
     gateway._client.options.return_value.search.assert_awaited_once_with(
         index='ecs-microsoft-windows-v1', size=100, query={'match_all': {}})
+
+
+async def test_es_error_reason_is_surfaced(gateway):
+    from elasticsearch import BadRequestError
+    meta = MagicMock(status=400)
+    error = BadRequestError('bad', meta, {'error': {
+        'root_cause': [{'reason': 'Failed to parse query [a:(]'}], 'caused_by': {'reason': 'Encountered EOF'}}})
+    gateway._client.options.return_value.search = AsyncMock(side_effect=error)
+    with patch('utils.elasticsearch.get_access_token', return_value=token(['helpdesk'])), \
+            patch('utils.elasticsearch.audit') as audit:
+        with pytest.raises(ToolError, match=r'Failed to parse query \[a:\(\]: Encountered EOF'):
+            await gateway.search('ecs-microsoft-windows-v1', size=1)
+    assert audit.call_args.kwargs['outcome'] == 'error'
+
+
+async def test_resolve_uses_policy_patterns(gateway):
+    scoped = gateway._client.options.return_value
+    scoped.indices.resolve_index = AsyncMock(return_value=MagicMock(body={}))
+    with patch('utils.elasticsearch.get_access_token', return_value=token(['helpdesk'])):
+        await gateway.resolve_accessible()
+    assert scoped.indices.resolve_index.call_args.kwargs['name'] == ['ecs-microsoft-windows-*']
+
+
+async def test_esql_requires_mapped_roles(gateway):
+    with patch('utils.elasticsearch.get_access_token', return_value=token([])):
+        with pytest.raises(ToolError, match='do not grant access'):
+            await gateway.esql('FROM x', {})
+    gateway._broker.key_for.assert_not_called()
