@@ -87,15 +87,28 @@ class Filter(BaseModel):
 
 
 def build_query(time_range: TimeRange, timestamp_field: str, max_days: int,
-                filters: list[Filter], query: str | None) -> dict[str, Any]:
+                filters: list[Filter], query: str | None, extra: list[dict[str, Any]] = ()) -> dict[str, Any]:
+    """Bool query for the time range, filters and full-text query; `extra` clauses must also match."""
     must = [time_range.to_query(timestamp_field, max_days)]
-    must += [f.to_query() for f in filters if not f.negate]
+    must += [f.to_query() for f in filters if not f.negate] + list(extra)
     bool_query: dict[str, Any] = {'filter': must}
     if must_not := [f.to_query() for f in filters if f.negate]:
         bool_query['must_not'] = must_not
     if query:
         bool_query['must'] = [{'query_string': {'query': query, 'allow_leading_wildcard': False}}]
     return {'bool': bool_query}
+
+
+def field_value(source: dict[str, Any], field: str) -> Any:
+    """Read a dotted field from a document that stores it either as a dotted key or nested objects."""
+    if field in source:
+        return source[field]
+    value: Any = source
+    for part in field.split('.'):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
 
 
 def fit_to_budget(rows: list[Any], max_chars: int) -> tuple[list[Any], bool]:

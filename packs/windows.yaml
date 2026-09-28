@@ -1,0 +1,102 @@
+name: windows
+title: Microsoft Windows security events
+index: ecs-microsoft-windows-v1
+description: >
+  Windows event log records, mostly from the Security log, collected from domain controllers
+  and servers and stored in Elastic Common Schema. Covers logons and logoffs, special privilege
+  assignment, process creation and exit, and Remote Desktop Gateway / RDP connection events.
+key_fields:
+  user.name: Account logon name in lower case, e.g. 'john.smith1' ('system' is the local system account)
+  user.id: Account SID, e.g. 'S-1-5-21-...'
+  user.domain: Account domain
+  user.type: "'User' for user accounts"
+  event.code: >-
+    Windows event ID as a string: 4624 logon, 4625 failed logon, 4634 logoff,
+    4672 special privileges assigned, 4688 process created, 4689 process exited
+  event.provider: Event source, e.g. Microsoft-Windows-Security-Auditing, Microsoft-Windows-TerminalServices-Gateway
+  event.outcome: success or failure
+  host.hostname: Fully qualified name of the computer that logged the event
+  client.ip: Remote client address, where the event has one
+  process.name: Executable name for process events (4688/4689)
+  process.command_line: Full command line for process creation (4688)
+  process.parent.name: Parent process executable name
+default_fields:
+  - '@timestamp'
+  - event.code
+  - event.action
+  - event.outcome
+  - event.provider
+  - user.name
+  - user.domain
+  - host.hostname
+  - client.ip
+  - process.name
+  - process.command_line
+  - process.parent.name
+tools:
+  - name: windows_active_users
+    kind: top_values
+    description: >
+      List the user accounts that appear in Windows events over a period, with how many events
+      each has and the account's SID and domain. Use to see who was active.
+    field: user.name
+    filters:
+      - {field: user.type, value: User}
+    include_fields: [user.id, user.domain]
+    size: 50
+
+  - name: windows_user_events
+    kind: search
+    description: Return Windows events involving one user account, most recent first.
+    params:
+      user:
+        description: Logon name, e.g. 'john.smith1'
+        fields: [user.name]
+
+  - name: windows_remote_access_events
+    kind: search
+    description: >
+      Remote Desktop Gateway (RDG) and Remote Desktop (RDP) connection events for a user, in
+      chronological order. Use to reconstruct a user's remote access sessions.
+    params:
+      user:
+        description: Logon name (e.g. 'john.smith1') or account SID
+        fields: [user.name, user.id]
+    filters:
+      - field: event.provider
+        op: in
+        value:
+          - Microsoft-Windows-TerminalServices-Gateway
+          - Microsoft-Windows-TerminalServices-RemoteConnectionManager
+    fields: ['*']
+    sort: asc
+    size: 50
+
+  - name: windows_failed_logons
+    kind: search
+    description: Failed logon attempts (event 4625), most recent first, optionally for one user.
+    params:
+      user:
+        description: Logon name, e.g. 'john.smith1'
+        fields: [user.name]
+        required: false
+    filters:
+      - {field: event.code, value: '4625'}
+
+  - name: windows_process_executions
+    kind: search
+    description: >
+      Processes started (event 4688), most recent first, with their command lines and parent
+      processes. Optionally narrow to a user and/or host.
+    params:
+      user:
+        description: Logon name, e.g. 'john.smith1'
+        fields: [user.name]
+        required: false
+      host:
+        description: Host name or its start, e.g. 'habpw01' matches 'habpw01.intranet.gradata.com.au'
+        fields: [host.hostname]
+        match: prefix
+        required: false
+    filters:
+      - {field: event.code, value: '4688'}

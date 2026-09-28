@@ -1,0 +1,85 @@
+name: ingress_nginx
+title: Kubernetes ingress-nginx access logs
+index: ecs-ingress-nginx-access-v1
+description: >
+  HTTP access logs from the Kubernetes ingress-nginx controller: one event per request to a
+  published web application, with client address and geolocation, requested URL, method,
+  response status and size, and user agent. Requests to healthcheck.apps.gradata.com.au are
+  synthetic health checks and usually worth excluding.
+key_fields:
+  source.ip: Client IP address
+  source.geo.country_iso_code: Client country, e.g. 'AU'
+  url.domain: Requested host name, e.g. 'auth.gradata.com.au'
+  url.path: Requested path
+  url.query: Query string
+  http.request.method: GET, POST, etc.
+  http.response.status_code: HTTP status code (number)
+  http.response.bytes: Response size in bytes
+  http.request.referrer: Referring page
+  user_agent.original: Client user agent string (keyword; use user_agent.original.text for full-text search)
+default_fields:
+  - '@timestamp'
+  - source.ip
+  - source.geo.country_iso_code
+  - http.request.method
+  - url.domain
+  - url.path
+  - url.query
+  - http.response.status_code
+  - http.response.bytes
+  - user_agent.original
+tools:
+  - name: nginx_top_clients
+    kind: top_values
+    description: >
+      Client IP addresses making the most requests, with their country and an example user agent.
+      Optionally limit to one site.
+    field: source.ip
+    params:
+      domain:
+        description: Site host name, e.g. 'auth.gradata.com.au'
+        fields: [url.domain]
+        required: false
+    include_fields: [source.geo.country_iso_code, user_agent.original]
+    size: 20
+
+  - name: nginx_client_requests
+    kind: search
+    description: Requests made by one client IP address, most recent first, optionally to one site.
+    params:
+      client_ip:
+        description: Client IP address, e.g. '203.0.113.7'
+        fields: [source.ip]
+      domain:
+        description: Site host name, e.g. 'auth.gradata.com.au'
+        fields: [url.domain]
+        required: false
+    size: 50
+
+  - name: nginx_server_errors
+    kind: search
+    description: Requests that failed with a 5xx server error, most recent first, optionally for one site.
+    params:
+      domain:
+        description: Site host name, e.g. 'auth.gradata.com.au'
+        fields: [url.domain]
+        required: false
+    filters:
+      - {field: http.response.status_code, op: gte, value: 500}
+
+  - name: nginx_top_paths
+    kind: top_values
+    description: >
+      Most requested URL paths, optionally for one site and/or one client IP. Useful for spotting
+      scanning (many distinct paths from one client) or popular endpoints.
+    field: url.path
+    params:
+      domain:
+        description: Site host name, e.g. 'auth.gradata.com.au'
+        fields: [url.domain]
+        required: false
+      client_ip:
+        description: Client IP address
+        fields: [source.ip]
+        required: false
+    size: 20

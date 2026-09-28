@@ -1,30 +1,30 @@
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 from fastmcp.server.auth.providers.keycloak import KeycloakAuthProvider
 
 from config import Settings
-from resources.windows_events import DateRange, get_users, get_top_events_by_user, \
-    get_remote_access_events_by_user
 from security.audit import AuditMiddleware, configure_audit_log
-from security.policy import AccessPolicy
+from security.policy import AccessPolicy, Caller
+from sources.packs import SourceTool, exposed_packs, load_packs
 from tools import generic
-from utils.elasticsearch import ElasticsearchGateway, gateway_from
+from utils.elasticsearch import ElasticsearchGateway
 
 logger = logging.getLogger(__name__)
 
 settings = Settings()
 policy = AccessPolicy.load(settings.access_policy_file)
 configure_audit_log(settings.audit_log_file)
+exposed = Caller('', '', frozenset(policy.exposed_indices))
+packs = exposed_packs(load_packs(settings.packs_dir), exposed.may_read)
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     es = ElasticsearchGateway(settings, policy)
     try:
-        yield {'es': es}
+        yield {'es': es, 'packs': packs}
     finally:
         await es.close()
 
@@ -42,41 +42,9 @@ mcp = FastMCP(
 
 for tool in generic.ALL_TOOLS:
     mcp.tool(tool)
-
-
-@mcp.tool
-async def get_windows_event_users(date_range: DateRange, ctx: Context) -> dict[str, Any]:
-    """
-    Query Windows events and return all users that feature in those events within the specified time range.
-    :param date_range: Period for which to return events
-    :return: List of user accounts featuring in events within the specified date range
-    """
-    return await get_users(gateway_from(ctx), settings.es_windows_index, date_range)
-
-
-@mcp.tool
-async def get_windows_events_by_user(user: str, size: int, date_range: DateRange, ctx: Context) -> dict[str, Any]:
-    """
-    Return Windows events relating to a specific user.
-    :param user: The logon name of the user (e.g., 'john.doe').
-    :param size: The maximum number of events to retrieve (e.g., 10, 50, or 100).
-    :param date_range: The time period (start and end dates) to filter events. Dates should be in YYYY-MM-DD format.
-    :return: Windows events in Elastic Common Schema JSON format
-    """
-    return await get_top_events_by_user(gateway_from(ctx), settings.es_windows_index, user, size, date_range)
-
-
-@mcp.tool
-async def get_windows_remote_access_events_by_user(user: str, size: int, date_range: DateRange,
-                                                   ctx: Context) -> dict[str, Any]:
-    """
-    Return Microsoft Remote Desktop Gateway (RDG) and Remote Desktop Protocol (RDP) events relating to a specific user.
-    :param user: The logon name of the user (e.g., 'john.doe').
-    :param size: The maximum number of events to retrieve (e.g., 10, 50, or 100).
-    :param date_range: The time period (start and end dates) to filter events in YYYY-MM-DD format.
-    :return: Windows events in Elastic Common Schema JSON format
-    """
-    return await get_remote_access_events_by_user(gateway_from(ctx), settings.es_windows_index, user, size, date_range)
+for pack in packs:
+    for spec in pack.tools:
+        mcp.add_tool(SourceTool.build(pack, spec))
 
 
 if __name__ == '__main__':

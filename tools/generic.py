@@ -4,8 +4,8 @@ from typing import Annotated, Any, Literal
 from fastmcp import Context
 from pydantic import Field
 
-from tools.query import Filter, TimeRange, build_query, fit_to_budget
-from utils.elasticsearch import gateway_from, shard_failure
+from tools.query import Filter, TimeRange, build_query, field_value, fit_to_budget
+from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
 
 Index = Annotated[str, Field(
     description="Index, alias or data stream name from list_data_sources, e.g. 'ecs-microsoft-windows-v1'. "
@@ -25,18 +25,71 @@ def _with_shard_warning(result: dict[str, Any], body: dict[str, Any]) -> dict[st
     return result
 
 
+async def run_search(es: ElasticsearchGateway, index: str, query: dict[str, Any], fields: list[str] | None,
+                     size: int, sort: str, timestamp_field: str) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        'query': query,
+        'size': size,
+        'sort': [{timestamp_field: {'order': sort, 'unmapped_type': 'date'}}],
+        'track_total_hits': True,
+    }
+    if fields:
+        params['_source'] = fields
+    body = await es.search(index, **params)
+
+    events = [{'index': h['_index'], 'id': h['_id'], 'event': h.get('_source', {})} for h in body['hits']['hits']]
+    events, truncated = fit_to_budget(events, es.settings.max_response_chars)
+    result: dict[str, Any] = {'total': body['hits']['total']['value'], 'returned': len(events), 'events': events}
+    if truncated:
+        result['truncated'] = True
+        result['hint'] = _TRUNCATED_HINT
+    return _with_shard_warning(result, body)
+
+
+async def run_top_values(es: ElasticsearchGateway, index: str, query: dict[str, Any], field: str, size: int,
+                         include_fields: list[str] | None = None) -> dict[str, Any]:
+    terms: dict[str, Any] = {'terms': {'field': field, 'size': size}}
+    if include_fields:
+        terms['aggs'] = {'sample': {'top_hits': {'size': 1, '_source': include_fields}}}
+    body = await es.search(index, size=0, query=query, aggs={'top': terms}, track_total_hits=True)
+
+    agg = body['aggregations']['top']
+    values = []
+    for bucket in agg['buckets']:
+        value = {'value': bucket.get('key_as_string', bucket['key']), 'count': bucket['doc_count']}
+        if include_fields:
+            hits = bucket['sample']['hits']['hits']
+            source = hits[0].get('_source', {}) if hits else {}
+            value['sample'] = {f: field_value(source, f) for f in include_fields}
+        values.append(value)
+    result: dict[str, Any] = {
+        'total_events': body['hits']['total']['value'],
+        'values': values,
+        'events_with_other_values': agg.get('sum_other_doc_count', 0),
+    }
+    if result['total_events'] and not values:
+        result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
+                          f"index. Use describe_fields to find the right field.")
+    return _with_shard_warning(result, body)
+
+
 async def list_data_sources(ctx: Context) -> dict[str, Any]:
     """
-    List the indices, aliases and data streams you are permitted to query.
+    List the indices, aliases and data streams you are permitted to query, and describe the known
+    data sources among them (what they contain, key fields, and dedicated tools).
     Start here to find the index names to pass to the other tools.
     """
     es = gateway_from(ctx)
     body = await es.resolve_accessible()
-    return {
+    result: dict[str, Any] = {
         'indices': sorted(i['name'] for i in body.get('indices', []) if 'data_stream' not in i),
         'aliases': sorted(a['name'] for a in body.get('aliases', [])),
         'data_streams': sorted(d['name'] for d in body.get('data_streams', [])),
     }
+    readable = set(result['indices']) | set(result['aliases']) | set(result['data_streams'])
+    result['sources'] = [pack.summary() for pack in ctx.lifespan_context.get('packs', [])
+                         if pack.index in readable]
+    return result
 
 
 async def describe_fields(
@@ -87,23 +140,9 @@ async def search_events(
     To count or rank values (e.g. top source IPs), use top_values instead.
     """
     es = gateway_from(ctx)
-    params: dict[str, Any] = {
-        'query': build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
-        'size': size,
-        'sort': [{timestamp_field: {'order': sort, 'unmapped_type': 'date'}}],
-        'track_total_hits': True,
-    }
-    if fields:
-        params['_source'] = fields
-    body = await es.search(index, **params)
-
-    events = [{'index': h['_index'], 'id': h['_id'], 'event': h.get('_source', {})} for h in body['hits']['hits']]
-    events, truncated = fit_to_budget(events, es.settings.max_response_chars)
-    result: dict[str, Any] = {'total': body['hits']['total']['value'], 'returned': len(events), 'events': events}
-    if truncated:
-        result['truncated'] = True
-        result['hint'] = _TRUNCATED_HINT
-    return _with_shard_warning(result, body)
+    return await run_search(
+        es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
+        fields, size, sort, timestamp_field)
 
 
 async def top_values(
@@ -116,6 +155,9 @@ async def top_values(
         filters: Filters = [],
         query: QueryString = None,
         size: Annotated[int, Field(ge=1, le=100, description="Number of top values to return.")] = 10,
+        include_fields: Annotated[list[str] | None, Field(
+            description="Fields to show from one example event per value, e.g. ['user.id'] alongside "
+                        "user.name.")] = None,
         timestamp_field: TimestampField = '@timestamp',
 ) -> dict[str, Any]:
     """
@@ -123,29 +165,15 @@ async def top_values(
     Useful for triage: top users, source IPs, event codes, URLs, destination ports and so on.
     """
     es = gateway_from(ctx)
-    body = await es.search(
-        index,
-        size=0,
-        query=build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
-        aggs={'top': {'terms': {'field': field, 'size': size}}},
-        track_total_hits=True,
-    )
-    agg = body['aggregations']['top']
-    result: dict[str, Any] = {
-        'total_events': body['hits']['total']['value'],
-        'values': [{'value': b.get('key_as_string', b['key']), 'count': b['doc_count']} for b in agg['buckets']],
-        'events_with_other_values': agg.get('sum_other_doc_count', 0),
-    }
-    if result['total_events'] and not result['values']:
-        result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
-                          f"index. Use describe_fields to find the right field.")
-    return _with_shard_warning(result, body)
+    return await run_top_values(
+        es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
+        field, size, include_fields)
 
 
 async def esql_query(
         query: Annotated[str, Field(
             description="ES|QL query starting with FROM, e.g. "
-                        "'FROM ecs-nginx-* | WHERE http.response.status_code >= 500 "
+                        "'FROM ecs-ingress-nginx-access-v1 | WHERE http.response.status_code >= 500 "
                         "| STATS errors = COUNT(*) BY url.path | SORT errors DESC | LIMIT 20'.")],
         time_range: TimeRange,
         ctx: Context,

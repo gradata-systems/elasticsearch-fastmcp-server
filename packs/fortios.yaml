@@ -1,0 +1,103 @@
+name: fortios
+title: FortiGate firewall logs (FortiOS)
+index: ecs-fortios-v1
+description: >
+  Logs from the FortiGate firewall: forwarded traffic sessions, VPN negotiation and tunnel
+  events, system events, and UTM events (application control, SSL inspection, intrusion
+  prevention). One event per log record.
+key_fields:
+  source.ip: Originating address
+  destination.ip: Target address
+  destination.port: Target port (number)
+  destination.domain: Target host name, where known
+  network.transport: tcp, udp, icmp, ...
+  destination.application.name: Application identified by application control
+  rule.name: Firewall policy name, e.g. 'Ingress interface to load balancer'
+  rule.id: Firewall policy ID
+  event.type_id: >-
+    Log type and subtype, e.g. traffic-forward, event-vpn-negotiate, event-vpn-tunnel-stats,
+    event-system, utm-app-ctrl, utm-ssl, utm-ips
+  event.outcome: failure when the logged action failed
+  observer.ingress.interface.name: Interface the traffic arrived on
+  observer.egress.interface.name: Interface the traffic left by
+  source.bytes: Bytes sent by the source
+  destination.bytes: Bytes sent by the destination
+  source.geo.country_iso_code: Source country, e.g. 'AU'
+default_fields:
+  - '@timestamp'
+  - event.type_id
+  - event.outcome
+  - source.ip
+  - source.geo.country_iso_code
+  - destination.ip
+  - destination.port
+  - destination.domain
+  - network.transport
+  - destination.application.name
+  - rule.name
+  - source.bytes
+  - destination.bytes
+tools:
+  - name: fortios_connections_from
+    kind: search
+    description: Firewall events originating from one address, most recent first, optionally to one port.
+    params:
+      source_ip:
+        description: Originating IP address
+        fields: [source.ip]
+      destination_port:
+        description: Target port, e.g. 443
+        fields: [destination.port]
+        type: integer
+        required: false
+    size: 50
+
+  - name: fortios_connections_to
+    kind: search
+    description: Firewall events targeting one address, most recent first, optionally on one port.
+    params:
+      destination_ip:
+        description: Target IP address
+        fields: [destination.ip]
+      destination_port:
+        description: Target port, e.g. 443
+        fields: [destination.port]
+        type: integer
+        required: false
+    size: 50
+
+  - name: fortios_top_destinations
+    kind: top_values
+    description: >
+      The addresses one source talked to most, with an example port, host name and application
+      for each. Useful for profiling a host's outbound activity.
+    field: destination.ip
+    params:
+      source_ip:
+        description: Originating IP address
+        fields: [source.ip]
+    include_fields: [destination.port, destination.domain, destination.application.name]
+    size: 20
+
+  - name: fortios_vpn_events
+    kind: search
+    description: VPN negotiation, tunnel and disconnect events, most recent first, optionally from one address.
+    params:
+      source_ip:
+        description: Remote peer IP address
+        fields: [source.ip]
+        required: false
+    filters:
+      - {field: event.type_id, op: prefix, value: event-vpn}
+
+  - name: fortios_ips_events
+    kind: search
+    description: Intrusion prevention (IPS) detections, most recent first, optionally involving one source address.
+    params:
+      source_ip:
+        description: Originating IP address
+        fields: [source.ip]
+        required: false
+    filters:
+      - {field: event.type_id, value: utm-ips}
+    fields: ['*']

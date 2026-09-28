@@ -41,7 +41,39 @@ days. Results are capped at `ES_MCP_MAX_RESULT_SIZE` rows and `ES_MCP_MAX_RESPON
 characters, with a `truncated` flag and a hint to narrow the query. Leading wildcards are
 rejected in Lucene queries. ES error reasons are returned so the model can correct its query.
 
-The `get_windows_*` tools are source-specific shortcuts for Windows ECS data.
+## Source packs
+
+Each YAML file in `packs/` (`ES_MCP_PACKS_DIR`) describes one data source and the curated tools
+built on it. Adding a source is a new YAML file, not new code:
+
+```yaml
+name: windows
+title: Microsoft Windows security events
+index: ecs-microsoft-windows-v1
+description: What the data is and what it's good for.
+key_fields:                 # shown to the model by list_data_sources
+  user.name: Account logon name, e.g. 'john.smith1'
+default_fields: ['@timestamp', user.name, event.code]   # returned by search tools
+tools:
+  - name: windows_remote_access_events
+    kind: search            # or top_values (with `field` and optional `include_fields`)
+    description: RDG and RDP connection events for a user, chronologically.
+    params:                 # become tool arguments; matched exactly (or by prefix)
+      user:
+        description: Logon name or SID
+        fields: [user.name, user.id]   # any of these may match
+    filters:                # fixed conditions, same format as search_events filters
+      - {field: event.provider, op: in, value: [Microsoft-Windows-TerminalServices-Gateway]}
+    sort: asc
+```
+
+Every generated tool also takes the required `time_range` and a capped `size`, and goes through
+the same run-as, exposed-index and audit path as the generic tools. Packs whose index isn't in
+`exposed_indices` are skipped at startup. `list_data_sources` describes each pack the caller can
+read, including its key fields and tools.
+
+Included packs: `windows` (Windows security events), `ingress_nginx` (ingress-nginx access logs)
+and `fortios` (FortiGate firewall logs).
 
 ## Elasticsearch setup
 

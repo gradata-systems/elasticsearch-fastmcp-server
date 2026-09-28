@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     es_impersonator_username: str
     es_impersonator_password: SecretStr
     es_request_timeout: float = 30.0
-    es_windows_index: str = 'ecs-microsoft-windows-v1'
     max_result_size: int = 500
     # Upper bound on serialized tool output, to protect the model's context window.
     max_response_chars: int = 100_000
@@ -24,6 +23,8 @@ class Settings(BaseSettings):
 
     # Exposed indices and impersonable usernames
     access_policy_file: Path = Path('access_policy.yaml')
+    # Source packs (*.yaml) describing data sources and their curated tools
+    packs_dir: Path = Path('packs')
 
     # Audit trail as JSON lines; stdout when unset (suits Kubernetes log shipping).
     audit_log_file: Path | None = None

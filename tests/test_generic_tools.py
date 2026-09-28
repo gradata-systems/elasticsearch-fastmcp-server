@@ -21,12 +21,18 @@ def ctx(es):
     return SimpleNamespace(lifespan_context={'es': es})
 
 
-async def test_list_data_sources_excludes_data_stream_backing_indices(es, ctx):
+async def test_list_data_sources_excludes_backing_indices_and_describes_readable_packs(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [
+        SourcePack(name='logs', title='Logs', description='App  logs', index='logs', key_fields={'f': 'meaning'}),
+        SourcePack(name='hidden', title='H', description='d', index='not-readable')]
     es.resolve_accessible = AsyncMock(return_value={
         'indices': [{'name': 'b-1'}, {'name': 'a-1'}, {'name': '.ds-logs-1', 'data_stream': 'logs'}],
         'aliases': [{'name': 'a'}], 'data_streams': [{'name': 'logs'}]})
     assert await generic.list_data_sources(ctx) == {
-        'indices': ['a-1', 'b-1'], 'aliases': ['a'], 'data_streams': ['logs']}
+        'indices': ['a-1', 'b-1'], 'aliases': ['a'], 'data_streams': ['logs'],
+        'sources': [{'name': 'logs', 'title': 'Logs', 'description': 'App logs', 'index': 'logs',
+                     'key_fields': {'f': 'meaning'}, 'tools': []}]}
 
 
 async def test_describe_fields_flattens_types(es, ctx):
