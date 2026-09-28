@@ -49,8 +49,8 @@ built on it. Adding a source is a new YAML file, not new code:
 ```yaml
 name: windows
 title: Microsoft Windows security events
-index: ecs-microsoft-windows-v1
-description: What the data is and what it's good for.
+index: ecs-microsoft-windows-*   # pattern spanning every retention tier
+description: What the data is, what it's good for, and how far back each tier goes.
 key_fields:                 # shown to the model by list_data_sources
   user.name: Account logon name, e.g. 'john.smith1'
 default_fields: ['@timestamp', user.name, event.code]   # returned by search tools
@@ -66,6 +66,11 @@ tools:
       - {field: event.provider, op: in, value: [Microsoft-Windows-TerminalServices-Gateway]}
     sort: asc
 ```
+
+When a source is split across retention tiers (for example a short-lived `-rs-*` index and a
+long-term `-v1` index, each event stored in only one), give the pack a pattern covering all of them
+and say in `description` how long each tier keeps data, so the model knows that older periods hold
+only a subset and an empty result there does not mean nothing happened.
 
 Every generated tool also takes the required `time_range` and a capped `size`, and goes through
 the same run-as, exposed-index and audit path as the generic tools. Packs whose index isn't in

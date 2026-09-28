@@ -9,8 +9,8 @@ from tools.query import Filter, TimeRange, build_query, field_value, fit_to_budg
 from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
 
 Index = Annotated[str, Field(
-    description="Index, alias or data stream name from list_data_sources, e.g. 'ecs-microsoft-windows-v1'. "
-                "Wildcards are allowed within your permitted patterns.")]
+    description="Index, alias, data stream or pattern from list_data_sources, e.g. 'ecs-microsoft-windows-*'. "
+                "For a known data source, use its 'index' pattern so every retention tier is searched.")]
 TimestampField = Annotated[str, Field(description="Timestamp field used for the time range.")]
 Filters = Annotated[list[Filter], Field(description="Exact-match and range conditions, all of which must hold.")]
 QueryString = Annotated[str | None, Field(
@@ -174,7 +174,7 @@ async def top_values(
 async def esql_query(
         query: Annotated[str, Field(
             description="ES|QL query starting with FROM, e.g. "
-                        "'FROM ecs-ingress-nginx-access-v1 | WHERE http.response.status_code >= 500 "
+                        "'FROM ecs-ingress-nginx-access-* | WHERE http.response.status_code >= 500 "
                         "| STATS errors = COUNT(*) BY url.path | SORT errors DESC | LIMIT 20'.")],
         time_range: TimeRange,
         ctx: Context,

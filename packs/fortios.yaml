@@ -48,7 +48,7 @@ tools:
     description: Firewall events originating from one address, most recent first, optionally to one port.
     params:
       source_ip:
-        description: Originating IP address
+        description: Originating IP address, e.g. '192.0.2.10'
         fields: [source.ip]
       destination_port:
         description: Target port, e.g. 443
@@ -62,7 +62,7 @@ tools:
     description: Firewall events targeting one address, most recent first, optionally on one port.
     params:
       destination_ip:
-        description: Target IP address
+        description: Target IP address, e.g. '198.51.100.20'
         fields: [destination.ip]
       destination_port:
         description: Target port, e.g. 443
@@ -79,7 +79,7 @@ tools:
     field: destination.ip
     params:
       source_ip:
-        description: Originating IP address
+        description: Originating IP address, e.g. '192.0.2.10'
         fields: [source.ip]
     include_fields: [destination.port, destination.domain, destination.application.name]
     size: 20
@@ -89,7 +89,7 @@ tools:
     description: VPN negotiation, tunnel and disconnect events, most recent first, optionally from one address.
     params:
       source_ip:
-        description: Remote peer IP address
+        description: Remote peer IP address, e.g. '203.0.113.7'
         fields: [source.ip]
         required: false
     filters:
@@ -100,7 +100,7 @@ tools:
     description: Intrusion prevention (IPS) detections, most recent first, optionally involving one source address.
     params:
       source_ip:
-        description: Originating IP address
+        description: Originating IP address, e.g. '192.0.2.10'
         fields: [source.ip]
         required: false
     filters:
