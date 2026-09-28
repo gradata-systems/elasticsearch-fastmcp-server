@@ -25,6 +25,25 @@ The server reads `ES_MCP_*` environment variables, or a `.env` file in its worki
 | `ES_MCP_USERNAME_CLAIM` | `keycloak.usernameClaim` | `preferred_username` | Token claim holding the Elasticsearch username. Must not be something users can edit. |
 | `ES_MCP_PUBLIC_BASE_URL` | `publicBaseUrl` | required | The URL clients connect to, e.g. `https://es-mcp.example.com`. Used in the OAuth metadata the server publishes, so it must match what clients use. |
 
+### Deployment identity
+
+Each deployment serves one cluster. Set these when an agent uses several deployments at once (see
+[Several clusters](deployment.md#several-clusters)):
+
+| Variable | Chart value | Default | Meaning |
+|---|---|---|---|
+| `ES_MCP_CLUSTER_NAME` | `cluster.name` | none | Name of the cluster, e.g. `Production SIEM`. It becomes the MCP server's name and appears in the server instructions, at the end of every tool description ("Cluster: …"), in `list_data_sources` and in every audit event. |
+| `ES_MCP_CLUSTER_DESCRIPTION` | `cluster.description` | none | A sentence on what the cluster holds, e.g. `Security logs for the head office`. Shown in the server instructions and `list_data_sources`. |
+| `ES_MCP_TOOL_PREFIX` | `toolPrefix` | none | Prefix for every tool and prompt name, e.g. `prod_` for `prod_search_events`. Lower-case letters, digits and underscores, ending in `_`. Tool descriptions, hints and the `create_source_pack` prompt then refer to other tools by their prefixed names. |
+
+When the cluster name is set, the instructions and `list_data_sources` tell agents that other
+clusters may be available through other deployments. The agent chooses a cluster only by the
+source packs each deployment offers the user, and asks which cluster they mean when packs on more
+than one cluster could fit, or none clearly does.
+
+The server refuses to start if a prefixed tool name would be longer than 64 characters, the
+limit many model APIs place on tool names.
+
 ### Limits
 
 | Variable | Chart value | Default | Meaning |

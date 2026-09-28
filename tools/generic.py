@@ -99,7 +99,7 @@ async def run_top_values(es: ElasticsearchGateway, index: str, query: dict[str, 
     }
     if result['total_events'] and not values:
         result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
-                          f"index. Use describe_fields to find the right field.")
+                          f"index. Use {es.settings.tool_prefix}describe_fields to find the right field.")
     return _with_shard_warning(result, body)
 
 
@@ -178,13 +178,23 @@ async def list_data_sources(ctx: Context) -> dict[str, Any]:
     """
     es = gateway_from(ctx)
     body = await es.resolve_accessible()
-    result: dict[str, Any] = {
+    result: dict[str, Any] = {}
+    if es.settings.cluster_name:
+        result['cluster'] = {
+            'name': es.settings.cluster_name,
+            'description': es.settings.cluster_description,
+            'hint': "Other clusters may be available through other deployments of this server. Choose between "
+                    "them only by the source packs in each one's 'sources', not by indices that no source pack "
+                    "describes. If source packs on more than one cluster could hold what the user is asking "
+                    "about, or none clearly does, ask the user which cluster they mean.",
+        }
+    result.update({
         'indices': sorted(i['name'] for i in body.get('indices', []) if 'data_stream' not in i),
         'aliases': sorted(a['name'] for a in body.get('aliases', [])),
         'data_streams': sorted(d['name'] for d in body.get('data_streams', [])),
-    }
+    })
     readable = set(result['indices']) | set(result['aliases']) | set(result['data_streams'])
-    result['sources'] = [pack.summary() for pack in ctx.lifespan_context.get('packs', [])
+    result['sources'] = [pack.summary(es.settings.tool_prefix) for pack in ctx.lifespan_context.get('packs', [])
                          if any(matches_index_expression(name, pack.index) for name in readable)]
     return result
 

@@ -17,6 +17,14 @@ statelessHttp: false
 # metadata, so it must match what clients connect to (the load balancer's DNS name).
 publicBaseUrl: ""
 
+# Identity of this deployment, which serves one cluster. Set these when one agent uses several
+# deployments (one per cluster): agents see the name and description, and the prefix keeps tool
+# names distinct in clients that don't separate tools by server, e.g. prod_ for prod_search_events.
+cluster:
+  name: ""
+  description: ""
+toolPrefix: ""
+
 elasticsearch:
   # e.g. https://prod-es-data-http.elastic.svc.prod:9200
   url: ""

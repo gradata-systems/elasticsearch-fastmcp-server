@@ -89,6 +89,12 @@ spec:
               value: {{ required "keycloak.audience is required" .Values.keycloak.audience | quote }}
             - name: ES_MCP_USERNAME_CLAIM
               value: {{ .Values.keycloak.usernameClaim | quote }}
+            - name: ES_MCP_CLUSTER_NAME
+              value: {{ .Values.cluster.name | quote }}
+            - name: ES_MCP_CLUSTER_DESCRIPTION
+              value: {{ .Values.cluster.description | quote }}
+            - name: ES_MCP_TOOL_PREFIX
+              value: {{ .Values.toolPrefix | quote }}
             - name: ES_MCP_MAX_RESULT_SIZE
               value: {{ .Values.limits.maxResultSize | quote }}
             - name: ES_MCP_MAX_RESPONSE_CHARS

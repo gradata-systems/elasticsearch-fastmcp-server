@@ -32,6 +32,8 @@ Result counts depend on the API: `hits_returned`, `hits_total` and `shards_faile
 Every event also carries:
 
 - `ts`: the time, in UTC
+- `cluster`: the deployment's `ES_MCP_CLUSTER_NAME`, when set, so that trails from several
+  deployments can be told apart
 - `sub`, `username` and `client_id`: who called, from the access token
 - `call_id`: links a `tool_call` to the `es_request` and `access_denied` events it caused
 

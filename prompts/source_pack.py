@@ -9,6 +9,10 @@ from pydantic import Field
 
 from sources.packs import SourcePack
 
+# Tools the instructions refer to, filled in with this deployment's (possibly prefixed) names.
+_TOOLS_MENTIONED = ['list_data_sources', 'describe_fields', 'top_values', 'search_events', 'compare_periods',
+                    'esql_query']
+
 # A Template rather than str.format, because the text is full of literal JSON braces.
 _INSTRUCTIONS = Template("""\
 You are helping the user write a source pack for this Elasticsearch MCP server: a YAML file that
@@ -50,12 +54,12 @@ field, the index patterns) and move on.
 
 ## Step 2: Look at the data, if you can
 
-If this server's `list_data_sources` shows an index the mapping applies to, use the read-only
+If this server's `$list_data_sources` shows an index the mapping applies to, use the read-only
 tools to ground the pack in real data. Keep each call small and the time range short.
-- `describe_fields` confirms which fields exist and how they are mapped.
-- `top_values` on candidate fields shows real values, their formats and case conventions, and
+- `$describe_fields` confirms which fields exist and how they are mapped.
+- `$top_values` on candidate fields shows real values, their formats and case conventions, and
   whether a field is populated at all.
-- `search_events` with `size` 3 shows what whole events look like.
+- `$search_events` with `size` 3 shows what whole events look like.
 
 If the index isn't available here, say so and rely on the user for example values.
 
@@ -89,7 +93,7 @@ best guess so the user can simply confirm or correct it. Ask in particular when:
 - a field exists as both `text` and `keyword`, and it matters which one agents should use,
 - a field is in the mapping but may not be populated,
 - several fields could name the kind of event. Settle which one is `event_type_field`, which
-  `compare_periods` groups by by default.
+  `$compare_periods` groups by by default.
 
 Also agree `default_fields`: the fields a search returns when a tool doesn't choose its own.
 They should be enough to read an event at a glance.
@@ -114,9 +118,9 @@ For each tool, decide:
 - for top and distinct values: `field`, `include_fields` for context, and `size`.
 
 Some use cases don't need a pack tool, so tell the user which generic tool covers them instead:
-- change over time ("what stopped or dropped since X") is covered by `compare_periods` and
+- change over time ("what stopped or dropped since X") is covered by `$compare_periods` and
   `event_type_field`,
-- anything needing several group-by fields, statistics or time buckets is covered by `esql_query`.
+- anything needing several group-by fields, statistics or time buckets is covered by `$esql_query`.
 
 Present the tools as a short table (name, kind, arguments, what it answers) and let the user
 adjust them before you write the YAML.
@@ -148,7 +152,7 @@ anywhere yourself. Explain that to use it, they (or whoever manages the deployme
    skipped at startup,
 3. validate it, for example with `uv run pytest` in a checkout that includes it, which loads every
    pack and rejects invalid ones, and
-4. redeploy or restart the server, then check that `list_data_sources` shows the pack.
+4. redeploy or restart the server, then check that `$list_data_sources` shows the pack.
 
 ## Pack schema
 
@@ -201,6 +205,8 @@ def create_source_pack(
     """Work with the user to write a source pack (YAML) for a data source, starting from its index mapping
     or index template and the use cases they want agents to handle."""
     packs: list[SourcePack] = ctx.lifespan_context.get('packs', [])
+    es = ctx.lifespan_context.get('es')
+    prefix = es.settings.tool_prefix if es else ''
     if use_cases and use_cases.strip():
         use_cases_section = ("The user wants agents to answer these questions. Confirm your reading of "
                              "each one and ask about any that are unclear:\n\n" + use_cases.strip())
@@ -216,6 +222,7 @@ def create_source_pack(
         existing_tools_section=existing_tools_section,
         index_section=f"The pack will cover `{index}`.\n\n" if index else '',
         mapping=_pretty(mapping),
+        **{name: prefix + name for name in _TOOLS_MENTIONED},
     )
 
 

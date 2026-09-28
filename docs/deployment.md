@@ -6,6 +6,7 @@ All settings are described in [Configuration](configuration.md).
 - [Running locally](#running-locally)
 - [Running the container](#running-the-container)
 - [Deploying to Kubernetes](#deploying-to-kubernetes)
+- [Several clusters](#several-clusters)
 - [Connecting clients](#connecting-clients)
 
 ## Running locally
@@ -159,6 +160,69 @@ Pods restart automatically when the policy, packs or a chart-managed password ch
   outage there doesn't restart the pods.
 - **Hardening.** Pods run as a non-root user with a read-only root filesystem, no capabilities
   and no Kubernetes API token. The server never calls the Kubernetes API.
+
+## Several clusters
+
+One deployment serves one Elasticsearch cluster. To let the same agent, for example OpenWebUI,
+query several clusters, run **one deployment per cluster** and connect the agent to each of them.
+Each deployment keeps its own Elasticsearch URL, impersonation account, CA, access policy, packs
+and audit trail, so one cluster's settings or credentials never affect another.
+
+Give each deployment a name, a description and a tool prefix:
+
+```yaml
+# prod-values.yaml
+publicBaseUrl: https://es-mcp-prod.example.com
+cluster:
+  name: Production SIEM
+  description: Security logs for the head office (Windows, FortiGate, ingress-nginx)
+toolPrefix: prod_
+elasticsearch:
+  url: https://prod-es-data-http.elastic.svc.prod:9200
+  # ...
+```
+
+```yaml
+# dr-values.yaml
+publicBaseUrl: https://es-mcp-dr.example.com
+cluster:
+  name: DR site
+  description: Security logs for the disaster recovery site (Windows only)
+toolPrefix: dr_
+elasticsearch:
+  url: https://dr-es-data-http.elastic.svc.dr:9200
+  # ...
+```
+
+```
+helm upgrade --install es-mcp-prod charts/es-mcp -n es-mcp -f prod-values.yaml
+helm upgrade --install es-mcp-dr charts/es-mcp -n es-mcp -f dr-values.yaml
+```
+
+Then add both servers to the agent. What each setting does for it:
+
+- **Tool prefix.** Without it, both deployments offer `search_events`, and clients that don't keep
+  tools from different servers apart may drop or mix them up. With it, the agent sees
+  `prod_search_events` and `dr_search_events`. Hints and descriptions name the same
+  deployment's tools, so an investigation doesn't drift between clusters partway through.
+- **Cluster name and description.** The agent sees which cluster each tool queries, in the
+  server instructions, in every tool description and in `list_data_sources`.
+- **Asking when unclear.** The instructions and `list_data_sources` tell the agent to choose the
+  cluster **only by its source packs**: the `sources` each deployment's `list_data_sources`
+  returns for that user. Indices, aliases and data streams that no pack describes don't count.
+  If packs on more than one cluster could hold what the user is asking about, or no pack clearly
+  does, the agent asks the user which cluster they mean. For example:
+  - A question about FortiGate traffic goes to `prod_`, because only production has the
+    `fortios` pack.
+  - A question about Windows logons, which both clusters' packs cover, prompts the agent to ask.
+  - A question about data that only exists as an unpacked index on one cluster also prompts it
+    to ask. To have such data chosen automatically, give it a pack.
+- **Audit.** Every audit event carries the cluster name, so trails from several deployments can
+  be collected in one place and still told apart.
+
+Every deployment can share Keycloak's `es-mcp` audience and client registrations. Each cluster's
+own Elasticsearch roles decide what a user can see there (see
+[Keycloak setup](keycloak-setup.md#several-deployments)).
 
 ## Connecting clients
 

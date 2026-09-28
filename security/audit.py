@@ -22,10 +22,17 @@ audit_logger = logging.getLogger('audit')
 
 # Correlates the tool_call event with the es_search events it triggered.
 _call_id: ContextVar[str | None] = ContextVar('audit_call_id', default=None)
+_cluster = ''
 
 
-def configure_audit_log(path: Path | None) -> None:
-    """Send audit events to `path` (JSON lines) or stdout, separately from application logs."""
+def configure_audit_log(path: Path | None, cluster: str = '') -> None:
+    """Send audit events to `path` (JSON lines) or stdout, separately from application logs.
+
+    `cluster` names the cluster this deployment serves in every event, so trails from several
+    deployments can be told apart once collected together.
+    """
+    global _cluster
+    _cluster = cluster
     handler = logging.FileHandler(path, encoding='utf-8') if path else logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter('%(message)s'))
     audit_logger.handlers[:] = [handler]
@@ -49,6 +56,7 @@ def audit(event: str, **fields: Any) -> None:
     record = {
         'ts': datetime.now(timezone.utc).isoformat(),
         'event': event,
+        **({'cluster': _cluster} if _cluster else {}),
         'call_id': _call_id.get(),
         **_identity(),
         **fields,

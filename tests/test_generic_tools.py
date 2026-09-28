@@ -14,7 +14,8 @@ TR = TimeRange(start='2026-09-01', end='2026-09-02')
 def es():
     gw = MagicMock()
     gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
-                                  max_aggregation_range_days=366)
+                                  max_aggregation_range_days=366,
+                                  tool_prefix="", cluster_name="", cluster_description="")
     return gw
 
 

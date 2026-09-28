@@ -95,7 +95,8 @@ def _server(es, packs):
 def es():
     gw = MagicMock()
     gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
-                                  max_aggregation_range_days=366)
+                                  max_aggregation_range_days=366,
+                                  tool_prefix="", cluster_name="", cluster_description="")
     gw.search = AsyncMock(return_value={'hits': {'total': {'value': 1}, 'hits': [
         {'_index': 'i', '_id': '1', '_source': {'user.name': 'john.smith1'}}]}})
     return gw

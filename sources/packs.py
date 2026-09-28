@@ -136,14 +136,14 @@ class SourcePack(BaseModel):
                    or any(fnmatch.fnmatchcase(part, target) for part in includes)
                    for target in index.split(',') if not target.startswith('-'))
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self, tool_prefix: str = '') -> dict[str, Any]:
         summary = {
             'name': self.name,
             'title': self.title,
             'description': ' '.join(self.description.split()),
             'index': self.index,
             'key_fields': self.key_fields,
-            'tools': [t.name for t in self.tools],
+            'tools': [tool_prefix + t.name for t in self.tools],
         }
         if self.retention_days:
             summary['retention_days'] = self.retention_days

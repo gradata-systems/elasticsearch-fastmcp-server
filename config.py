@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     # Longer limit for tools that return counts rather than events (top values, distinct values,
     # period comparisons, ES|QL with STATS): aggregating a long period is cheap for Elasticsearch.
     max_aggregation_range_days: int = 366
+
+    # Identity of this deployment, which serves one cluster. Agents may use several deployments at
+    # once, one per cluster: the name and description tell them apart, and the prefix keeps tool names
+    # distinct in clients that don't separate tools by server, e.g. 'prod_' for 'prod_search_events'.
+    cluster_name: str = ''
+    cluster_description: str = ''
+    tool_prefix: str = Field(default='', pattern=r'^([a-z][a-z0-9_]*_)?$')
 
     # Exposed indices and impersonable usernames
     access_policy_file: Path = Path('access_policy.yaml')

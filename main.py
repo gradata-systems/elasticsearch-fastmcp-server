@@ -7,18 +7,17 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
 from config import Settings
-from prompts import source_pack
 from security.audit import AuditMiddleware, configure_audit_log
 from security.policy import AccessPolicy, Caller
-from sources.packs import SourceTool, exposed_packs, load_packs
-from tools import generic
+from sources.packs import exposed_packs, load_packs
+from tools import deployment
 from utils.elasticsearch import ElasticsearchGateway
 
 logger = logging.getLogger(__name__)
 
 settings = Settings()
 policy = AccessPolicy.load(settings.access_policy_file)
-configure_audit_log(settings.audit_log_file)
+configure_audit_log(settings.audit_log_file, settings.cluster_name)
 exposed = Caller('', '', frozenset(policy.exposed_indices))
 packs = exposed_packs(load_packs(settings.packs_dir), exposed.may_read)
 
@@ -33,7 +32,8 @@ async def lifespan(server: FastMCP):
 
 
 mcp = FastMCP(
-    "elasticsearch",
+    settings.cluster_name or "elasticsearch",
+    instructions=deployment.server_instructions(settings, packs),
     lifespan=lifespan,
     auth=KeycloakAuthProvider(
         realm_url=settings.keycloak_realm_url,
@@ -53,13 +53,7 @@ async def healthz(request: Request) -> Response:
     return PlainTextResponse('ok')
 
 
-for tool in generic.ALL_TOOLS:
-    mcp.tool(tool)
-for prompt in source_pack.ALL_PROMPTS:
-    mcp.prompt(prompt)
-for pack in packs:
-    for spec in pack.tools:
-        mcp.add_tool(SourceTool.build(pack, spec))
+deployment.register(mcp, settings, packs)
 
 
 if __name__ == '__main__':

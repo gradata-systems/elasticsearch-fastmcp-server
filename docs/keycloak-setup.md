@@ -77,3 +77,18 @@ realm URL, `aud` includes `es-mcp`, and `preferred_username` is `service-account
 Access is decided by the username claim. If users can rename themselves, they can impersonate
 others. Keep the realm's *Edit username* setting off (`editUsernameAllowed: false`), or take
 usernames read-only from LDAP/AD.
+
+## Several deployments
+
+When you run one deployment per Elasticsearch cluster (see
+[Several clusters](deployment.md#several-clusters)), all of them can use the same `es-mcp`
+audience and client scope, and the same chat and agent clients. A token issued for one deployment
+is then accepted by the others. That's intended: the server adds no access of its own, and each
+cluster applies the user's own roles for that cluster. A user without an account or role on a
+cluster gets `run_as_denied` or `elasticsearch_403` there.
+
+If you ever need a token to work only at one deployment, give that deployment its own audience
+(`ES_MCP_KEYCLOAK_AUDIENCE`) and a client scope that adds it.
+
+Chat clients register each deployment as a separate MCP server. Add each deployment's callback
+URL to the chat client's `redirectUris` if the client shows a different one per server.

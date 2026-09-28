@@ -4,9 +4,10 @@
 
 | Path | What's there |
 |---|---|
-| `main.py` | Builds the FastMCP server: authentication, audit middleware, and tool registration. |
+| `main.py` | Builds the FastMCP server: authentication, audit middleware, instructions and registration. |
 | `config.py` | Settings, read from `ES_MCP_*` variables (see [Configuration](configuration.md)). |
 | `tools/generic.py` | The generic tools. |
+| `tools/deployment.py` | Registering tools and prompts with the tool prefix, the cluster name, and the server instructions. |
 | `tools/query.py` | Shared building blocks: time ranges, filters, query building and the response size budget. |
 | `sources/packs.py` | Loading source packs and generating their tools (see [Source packs](source-packs.md)). |
 | `prompts/` | MCP prompts, such as `create_source_pack`. |

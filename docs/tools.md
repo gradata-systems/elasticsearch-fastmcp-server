@@ -4,6 +4,9 @@ How to use each tool the server exposes, with example arguments and (shortened) 
 generic tools work against any index the caller may read; the pack tools are generated from the
 YAML files in `packs/` and are shortcuts for common questions about one data source.
 
+Tool names here are unprefixed. A deployment with `ES_MCP_TOOL_PREFIX` set, such as `prod_`,
+offers them as `prod_search_events` and so on (see [Several clusters](deployment.md#several-clusters)).
+
 - [Choosing a tool](#choosing-a-tool)
 - [Common arguments](#common-arguments)
 - [What results look like](#what-results-look-like)

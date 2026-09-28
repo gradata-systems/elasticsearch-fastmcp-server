@@ -12,6 +12,9 @@ audit trail.
 - **Guardrails for agents.** Time range limits, response size budgets, retention notes and clear
   errors that let an agent correct its own queries.
 - **Audited.** Every tool call and Elasticsearch request is logged with the identity behind it.
+- **One deployment per cluster.** An agent can use several side by side. Each deployment names
+  its cluster and can prefix its tools, and agents ask the user when it isn't clear which cluster
+  is meant.
 
 ## Tools
 
