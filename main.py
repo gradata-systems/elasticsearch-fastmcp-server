@@ -9,14 +9,14 @@ from config import Settings
 from resources.windows_events import DateRange, get_users, get_top_events_by_user, \
     get_remote_access_events_by_user
 from security.audit import AuditMiddleware, configure_audit_log
-from security.policy import RbacPolicy
+from security.policy import AccessPolicy
 from tools import generic
 from utils.elasticsearch import ElasticsearchGateway, gateway_from
 
 logger = logging.getLogger(__name__)
 
 settings = Settings()
-policy = RbacPolicy.load(settings.rbac_policy_file)
+policy = AccessPolicy.load(settings.access_policy_file)
 configure_audit_log(settings.audit_log_file)
 
 

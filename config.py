@@ -9,12 +9,12 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix='ES_MCP_', env_file='.env', extra='ignore')
 
-    # Elasticsearch. The broker account is a native ES user whose only job is to mint
-    # short-lived, index-scoped API keys; it is never used to run searches itself.
+    # Elasticsearch. The impersonation account is a native ES user with only the run_as
+    # privilege; every request runs as the caller's own ES user.
     es_url: str
     es_ca_certs: Path | None = None
-    es_broker_username: str
-    es_broker_password: SecretStr
+    es_impersonator_username: str
+    es_impersonator_password: SecretStr
     es_request_timeout: float = 30.0
     es_windows_index: str = 'ecs-microsoft-windows-v1'
     max_result_size: int = 500
@@ -22,9 +22,8 @@ class Settings(BaseSettings):
     max_response_chars: int = 100_000
     max_time_range_days: int = 90
 
-    # RBAC
-    rbac_policy_file: Path = Path('rbac.yaml')
-    api_key_lifetime_minutes: int = 60
+    # Exposed indices and impersonable usernames
+    access_policy_file: Path = Path('access_policy.yaml')
 
     # Audit trail as JSON lines; stdout when unset (suits Kubernetes log shipping).
     audit_log_file: Path | None = None
@@ -32,9 +31,8 @@ class Settings(BaseSettings):
     # Keycloak (OAuth2 authorization server)
     keycloak_realm_url: str
     keycloak_audience: str
-    # Client whose client roles (resource_access.<id>.roles) are mapped to indices.
-    # If unset, realm roles (realm_access.roles) are used instead.
-    keycloak_roles_client_id: str | None = None
+    # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
+    username_claim: str = 'preferred_username'
     public_base_url: str
 
     # HTTP listener. Leave TLS unset only when TLS is terminated in front of the server.

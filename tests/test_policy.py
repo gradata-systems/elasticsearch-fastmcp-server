@@ -1,40 +1,42 @@
-from security.policy import Caller, RbacPolicy, roles_from_claims
+import pytest
 
-POLICY = RbacPolicy.model_validate({
-    'roles': {
-        'soc-analyst': {'indices': ['ecs-microsoft-windows-*', 'ecs-nginx-*']},
-        'helpdesk': {'indices': ['ecs-microsoft-windows-*']},
-    }
+from security.policy import AccessPolicy, Caller
+
+POLICY = AccessPolicy.model_validate({
+    'exposed_indices': ['ecs-microsoft-windows-*', 'ecs-ingress-nginx-*'],
+    'impersonable_users': ['*.*', 'service-account-*'],
 })
 
-CLAIMS = {
-    'realm_access': {'roles': ['helpdesk', 'offline_access']},
-    'resource_access': {'es-mcp': {'roles': ['soc-analyst']}},
-}
+
+@pytest.mark.parametrize('username', ['john.smith1', 'anja.michel', 'service-account-langgraph-triage'])
+def test_people_and_agents_are_impersonable(username):
+    assert POLICY.may_impersonate(username, 'mcp_impersonator')
 
 
-def test_client_roles_used_when_client_id_set():
-    assert roles_from_claims(CLAIMS, 'es-mcp') == {'soc-analyst'}
+@pytest.mark.parametrize('username', [
+    'elastic', 'kibana_system',          # built-in, never impersonated
+    'svc_avw_api', 'admin',              # outside the configured patterns
+    'mcp_impersonator',                  # the impersonation account itself
+    '_internal.user',                    # reserved prefix
+    'john.smith1,elastic',               # multiple users in one header value
+    'john.smith1\r\nx-evil: 1', 'john .smith', '',  # header injection / junk
+    'a' * 257 + '.b',
+])
+def test_unsafe_usernames_are_refused(username):
+    assert not POLICY.may_impersonate(username, 'mcp_impersonator')
 
 
-def test_realm_roles_used_when_no_client_id():
-    assert roles_from_claims(CLAIMS, None) == {'helpdesk', 'offline_access'}
+def test_reserved_users_refused_even_if_patterns_allow_everything():
+    permissive = AccessPolicy(exposed_indices=['*'], impersonable_users=['*'])
+    assert not permissive.may_impersonate('elastic', 'mcp_impersonator')
 
 
-def test_missing_claims_yield_no_roles():
-    assert roles_from_claims({}, 'es-mcp') == frozenset()
-    assert roles_from_claims({}, None) == frozenset()
-
-
-def test_patterns_are_union_of_mapped_roles_and_unknown_roles_grant_nothing():
-    assert POLICY.index_patterns_for({'soc-analyst', 'helpdesk', 'offline_access'}) == {
-        'ecs-microsoft-windows-*', 'ecs-nginx-*'}
-    assert POLICY.index_patterns_for({'offline_access'}) == frozenset()
-
-
-def test_may_read_matches_patterns_only():
-    caller = Caller('sub', frozenset({'helpdesk'}), POLICY.index_patterns_for({'helpdesk'}))
+def test_may_read_matches_exposed_patterns_only():
+    caller = Caller('sub', 'john.smith1', frozenset(POLICY.exposed_indices))
     assert caller.may_read('ecs-microsoft-windows-v1')
-    assert not caller.may_read('ecs-nginx-v1')
+    assert caller.may_read('ecs-microsoft-windows-v1,ecs-ingress-nginx-access-v1')
+    assert not caller.may_read('ecs-fortios-v1')
     assert not caller.may_read('*')
-    assert not caller.may_read('ecs-microsoft-windows-v1,ecs-nginx-v1')
+    assert not caller.may_read('ecs-microsoft-windows-v1,ww2_nomroll')
+    assert not caller.may_read('remote:ecs-microsoft-windows-v1')
+    assert not caller.may_read('ecs-microsoft-windows-v1,')

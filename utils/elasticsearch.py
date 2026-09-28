@@ -1,15 +1,15 @@
 import logging
 from typing import Any, Awaitable, Callable
 
-from elasticsearch import ApiError, AsyncElasticsearch, AuthorizationException, TransportError
+from elasticsearch import ApiError, AsyncElasticsearch, AuthenticationException, AuthorizationException,     TransportError
 from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_access_token
 
 from config import Settings
-from security.api_keys import ApiKeyBroker
 from security.audit import audit
-from security.policy import Caller, RbacPolicy, roles_from_claims
+from security.esql import UnsupportedQuery, source_indices
+from security.policy import AccessPolicy, Caller
 
 logger = logging.getLogger(__name__)
 
@@ -46,23 +46,25 @@ def _hits_summary(body: dict[str, Any]) -> dict[str, Any]:
 
 
 class ElasticsearchGateway:
-    """Runs Elasticsearch requests on behalf of the authenticated MCP caller.
+    """Runs Elasticsearch requests as the authenticated MCP caller.
 
-    Every request uses an API key scoped to the caller's permitted indices. The broker
-    credentials held by the underlying client are only ever used to mint those keys.
+    The server logs in as an impersonation account and sends every request with
+    `es-security-runas-user` set to the caller's username, so Elasticsearch applies that
+    user's own roles. The impersonation account has no index privileges of its own.
     """
 
-    def __init__(self, settings: Settings, policy: RbacPolicy):
+    RUN_AS_HEADER = 'es-security-runas-user'
+
+    def __init__(self, settings: Settings, policy: AccessPolicy):
         self.settings = settings
         self._policy = policy
         self._client = AsyncElasticsearch(
             settings.es_url,
-            basic_auth=(settings.es_broker_username, settings.es_broker_password.get_secret_value()),
+            basic_auth=(settings.es_impersonator_username, settings.es_impersonator_password.get_secret_value()),
             ca_certs=str(settings.es_ca_certs) if settings.es_ca_certs else None,
             verify_certs=True,
             request_timeout=settings.es_request_timeout,
         )
-        self._broker = ApiKeyBroker(self._client, lifetime_seconds=settings.api_key_lifetime_minutes * 60)
 
     async def close(self) -> None:
         await self._client.close()
@@ -72,8 +74,12 @@ class ElasticsearchGateway:
         if token is None or not token.subject:
             audit('access_denied', reason='unauthenticated')
             raise ToolError("Not authenticated")
-        roles = roles_from_claims(token.claims or {}, self.settings.keycloak_roles_client_id)
-        return Caller(token.subject, roles, self._policy.index_patterns_for(roles))
+        username = (token.claims or {}).get(self.settings.username_claim)
+        if not isinstance(username, str) or not self._policy.may_impersonate(
+                username, self.settings.es_impersonator_username):
+            audit('access_denied', reason='username_not_impersonable', es_user=username)
+            raise ToolError("Your account is not permitted to query Elasticsearch through this server")
+        return Caller(token.subject, username, frozenset(self._policy.exposed_indices))
 
     async def _execute(
         self,
@@ -83,27 +89,28 @@ class ElasticsearchGateway:
         call: Callable[[AsyncElasticsearch], Awaitable[Any]],
         summarize: Callable[[dict[str, Any]], dict[str, Any]] = lambda body: {},
     ) -> dict[str, Any]:
-        """Run `call` with the caller's scoped client, auditing the outcome.
+        """Run `call` as the caller, auditing the outcome.
 
-        `index` is checked against the caller's policy first when given; requests whose
-        target can't be checked up front (ES|QL) rely on Elasticsearch alone.
+        `index` (comma-separated targets) is checked against the exposed patterns first;
+        Elasticsearch then enforces the caller's own privileges.
         """
         caller = self.current_caller()
-        who = {'api': api, 'roles': sorted(caller.roles), 'index': index}
-        if not caller.index_patterns:
-            audit('access_denied', reason='no_mapped_roles', **who)
-            raise ToolError("Your roles do not grant access to any data")
+        who = {'api': api, 'es_user': caller.username, 'index': index}
         if index is not None and not caller.may_read(index):
-            audit('access_denied', reason='index_not_in_policy', **who)
-            raise ToolError(f"Access to index '{index}' is not permitted for your roles")
+            audit('access_denied', reason='index_not_exposed', **who)
+            raise ToolError(f"Index '{index}' is not available through this server; see list_data_sources")
 
-        api_key = await self._broker.key_for(caller.index_patterns)
-        client = self._client.options(api_key=api_key, opaque_id=f'mcp:{caller.subject}')
-        logger.debug("%s on %s: %s", api, index, request)
+        client = self._client.options(headers={self.RUN_AS_HEADER: caller.username},
+                                      opaque_id=f'mcp:{caller.username}')
+        logger.debug("%s on %s as %s: %s", api, index, caller.username, request)
         try:
             response = await call(client)
-        except AuthorizationException as e:
-            audit('access_denied', reason='elasticsearch_403', request=request, **who)
+        except (AuthenticationException, AuthorizationException) as e:
+            run_as_failed = e.status_code == 401 or 'unauthorized to run as' in str(e)
+            audit('access_denied', reason='run_as_denied' if run_as_failed else 'elasticsearch_403',
+                  request=request, **who)
+            if run_as_failed:
+                raise ToolError(f"Elasticsearch has no usable account '{caller.username}' to run this as") from e
             raise ToolError("Elasticsearch denied access to the requested data") from e
         except ApiError as e:
             reason = _error_reason(e)
@@ -137,18 +144,21 @@ class ElasticsearchGateway:
                                    lambda body: {'fields_returned': len(body.get('fields', {}))})
 
     async def resolve_accessible(self) -> dict[str, Any]:
-        """Indices, aliases and data streams matching the caller's policy patterns.
+        """Indices, aliases and data streams matching the exposed patterns.
 
-        Wildcards are resolved by Elasticsearch under the caller's scoped key, so only
-        targets the caller can actually read are returned.
+        Wildcards are resolved by Elasticsearch as the caller, so only targets the caller
+        can actually read are returned.
         """
-        caller = self.current_caller()
-        names = sorted(caller.index_patterns)
+        names = sorted(self._policy.exposed_indices)
         return await self._execute('resolve_index', None, {'names': names},
                                    lambda c: c.indices.resolve_index(name=names, ignore_unavailable=True,
                                                                      allow_no_indices=True))
 
     async def esql(self, query: str, filter: dict[str, Any]) -> dict[str, Any]:
-        return await self._execute('esql', None, {'query': query, 'filter': filter},
+        try:
+            indices = ','.join(source_indices(query))
+        except UnsupportedQuery as e:
+            raise ToolError(str(e)) from e
+        return await self._execute('esql', indices, {'query': query, 'filter': filter},
                                    lambda c: c.esql.query(query=query, filter=filter),
                                    lambda body: {'took_ms': body.get('took'), 'rows': len(body.get('values', []))})

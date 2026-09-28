@@ -1,58 +1,58 @@
 import fnmatch
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
 
+# Built-in accounts that must never be impersonated, whatever the configured patterns say.
+RESERVED_USERS = frozenset({
+    'elastic', 'kibana', 'kibana_system', 'logstash_system', 'beats_system', 'apm_system',
+    'remote_monitoring_user',
+})
+# Printable, no whitespace or commas: rules out header tricks and multi-user values.
+_USERNAME = re.compile(r'^[A-Za-z0-9._@\-]{1,256}$')
 
-class RolePolicy(BaseModel):
-    indices: list[str] = Field(min_length=1, description="Index patterns this role may read.")
+
+def _matches(value: str, patterns: list[str] | frozenset[str]) -> bool:
+    return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
 
 
-class RbacPolicy(BaseModel):
-    """Maps Keycloak roles to the Elasticsearch index patterns they may read."""
+class AccessPolicy(BaseModel):
+    """Server-side limits applied on top of each user's own Elasticsearch privileges."""
 
-    roles: dict[str, RolePolicy]
+    exposed_indices: list[str] = Field(
+        min_length=1,
+        description="Index patterns this server exposes. A user sees the overlap of these and their ES roles.")
+    impersonable_users: list[str] = Field(
+        min_length=1,
+        description="Usernames the server may run as. Should mirror the impersonation account's run_as.")
 
     @classmethod
-    def load(cls, path: Path) -> 'RbacPolicy':
+    def load(cls, path: Path) -> 'AccessPolicy':
         with path.open(encoding='utf-8') as f:
             return cls.model_validate(yaml.safe_load(f))
 
-    def index_patterns_for(self, roles: set[str]) -> frozenset[str]:
-        return frozenset(
-            pattern
-            for role in roles if role in self.roles
-            for pattern in self.roles[role].indices
+    def may_impersonate(self, username: str, impersonator: str) -> bool:
+        return (
+            bool(_USERNAME.match(username))
+            and not username.startswith('_')
+            and username not in RESERVED_USERS
+            and username != impersonator
+            and _matches(username, self.impersonable_users)
         )
 
 
 @dataclass(frozen=True)
 class Caller:
     subject: str
-    roles: frozenset[str]
+    username: str
     index_patterns: frozenset[str]
 
     def may_read(self, index: str) -> bool:
-        """Advisory check for friendlier errors; Elasticsearch enforces the real boundary."""
-        parts = index.split(',')
-        return all(
-            part and any(fnmatch.fnmatchcase(part, pattern) for pattern in self.index_patterns)
-            for part in parts
-        )
+        """Whether every comma-separated target is within the exposed patterns.
 
-
-def roles_from_claims(claims: dict[str, Any], client_id: str | None) -> frozenset[str]:
-    """Extract Keycloak roles from access-token claims.
-
-    Uses client roles of `client_id` when given, otherwise realm roles. Only one source is
-    read so that a realm role can't accidentally grant access meant for a client role.
-    """
-    if client_id:
-        container = (claims.get('resource_access') or {}).get(client_id) or {}
-    else:
-        container = claims.get('realm_access') or {}
-    roles = container.get('roles') or []
-    return frozenset(r for r in roles if isinstance(r, str))
+        This narrows what the server exposes; the user's ES roles remain the security boundary.
+        """
+        return all(part and _matches(part, self.index_patterns) for part in index.split(','))

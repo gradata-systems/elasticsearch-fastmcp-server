@@ -1,0 +1,12 @@
+# Indices this server exposes. Each caller sees only the overlap of these patterns and what
+# their own Elasticsearch roles allow; ES enforces the latter.
+exposed_indices:
+  - ecs-microsoft-windows-*
+  - ecs-ingress-nginx-*
+  - ecs-fortios-*
+
+# Usernames (the token's preferred_username) the server may run as. Keep in step with the
+# impersonation account's run_as privilege. Built-in accounts such as 'elastic' are always refused.
+impersonable_users:
+  - "*.*"                 # people, e.g. john.smith1
+  - "service-account-*"   # agents using Keycloak client credentials
