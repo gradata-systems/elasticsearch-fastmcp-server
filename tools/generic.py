@@ -5,7 +5,7 @@ from fastmcp import Context
 from pydantic import Field
 
 from tools.query import Filter, TimeRange, build_query, fit_to_budget
-from utils.elasticsearch import gateway_from
+from utils.elasticsearch import gateway_from, shard_failure
 
 Index = Annotated[str, Field(
     description="Index, alias or data stream name from list_data_sources, e.g. 'ecs-microsoft-windows-v1'. "
@@ -17,6 +17,12 @@ QueryString = Annotated[str | None, Field(
                 "'event.action:logon-failed AND NOT user.name:svc_*'. Leading wildcards are not allowed.")]
 
 _TRUNCATED_HINT = "Output was truncated; narrow the time range, add filters, or request fewer fields."
+
+
+def _with_shard_warning(result: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    if reason := shard_failure(body):
+        result['warning'] = f"Results are incomplete because part of the data could not be searched: {reason}"
+    return result
 
 
 async def list_data_sources(ctx: Context) -> dict[str, Any]:
@@ -46,7 +52,7 @@ async def describe_fields(
     or with a full-text query (text).
     """
     es = gateway_from(ctx)
-    body = await es.field_caps(index, fields)
+    body = await es.field_caps(index, [f.strip() for f in fields.split(',') if f.strip()] or ['*'])
     described = {}
     for name, types in sorted(body.get('fields', {}).items()):
         kinds = sorted(t for t in types if t not in ('object', 'nested'))
@@ -97,7 +103,7 @@ async def search_events(
     if truncated:
         result['truncated'] = True
         result['hint'] = _TRUNCATED_HINT
-    return result
+    return _with_shard_warning(result, body)
 
 
 async def top_values(
@@ -125,11 +131,15 @@ async def top_values(
         track_total_hits=True,
     )
     agg = body['aggregations']['top']
-    return {
+    result: dict[str, Any] = {
         'total_events': body['hits']['total']['value'],
         'values': [{'value': b.get('key_as_string', b['key']), 'count': b['doc_count']} for b in agg['buckets']],
         'events_with_other_values': agg.get('sum_other_doc_count', 0),
     }
+    if result['total_events'] and not result['values']:
+        result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
+                          f"index. Use describe_fields to find the right field.")
+    return _with_shard_warning(result, body)
 
 
 async def esql_query(

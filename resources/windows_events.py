@@ -70,7 +70,8 @@ async def get_users(es: ElasticsearchGateway, index: str, date_range: DateRange)
     for bucket in response['aggregations']['users']['buckets']:
         source = bucket['metadata']['hits']['hits'][0]['_source']
         users.append({
-            "id": (source.get('user') or {}).get('id'),
+            # Documents may hold ECS fields as dotted keys or as nested objects.
+            "id": source.get('user.id') or (source.get('user') or {}).get('id'),
             "login_name": bucket['key'],
             "event_count": bucket['doc_count']
         })

@@ -33,8 +33,10 @@ async def test_describe_fields_flattens_types(es, ctx):
     es.field_caps = AsyncMock(return_value={'indices': ['i'], 'fields': {
         '_id': {'_id': {}}, 'user': {'object': {}}, 'user.name': {'keyword': {}},
         'source.ip': {'ip': {}, 'keyword': {}}}})
-    assert await generic.describe_fields('i', ctx, 'user.*') == {
+    assert await generic.describe_fields('i', ctx, 'user.*, source.ip') == {
         'indices': ['i'], 'fields': {'source.ip': ['ip', 'keyword'], 'user.name': 'keyword'}}
+    # A comma-joined string is treated by ES as one literal pattern, so it must be split.
+    es.field_caps.assert_awaited_once_with('i', ['user.*', 'source.ip'])
 
 
 async def test_describe_fields_truncates(es, ctx):
@@ -65,6 +67,19 @@ async def test_top_values(es, ctx):
     assert result == {'total_events': 100, 'events_with_other_values': 10,
                       'values': [{'value': 'alice', 'count': 60}, {'value': 'true', 'count': 30}]}
     assert es.search.call_args.kwargs['aggs'] == {'top': {'terms': {'field': 'user.name', 'size': 2}}}
+
+
+async def test_top_values_hints_when_field_absent(es, ctx):
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 5}}, 'aggregations': {'top': {'buckets': []}}})
+    result = await generic.top_values('i', 'event.action', TR, ctx)
+    assert 'describe_fields' in result['hint']
+
+
+async def test_search_events_warns_on_partial_shard_failure(es, ctx):
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 0}, 'hits': []}, '_shards': {
+        'total': 4, 'failed': 1, 'failures': [{'reason': {'reason': 'boom'}}]}})
+    result = await generic.search_events('i', TR, ctx)
+    assert result['warning'].endswith('boom')
 
 
 async def test_esql_applies_time_filter_and_caps_rows(es, ctx):

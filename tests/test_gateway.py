@@ -102,3 +102,32 @@ async def test_esql_requires_mapped_roles(gateway):
         with pytest.raises(ToolError, match='do not grant access'):
             await gateway.esql('FROM x', {})
     gateway._broker.key_for.assert_not_called()
+
+
+def _shards(total, failed, skipped=0):
+    body = {'_shards': {'total': total, 'successful': total - failed, 'skipped': skipped, 'failed': failed},
+            'hits': {'hits': [], 'total': {'value': 0}}}
+    if failed:
+        body['_shards']['failures'] = [{'reason': {
+            'type': 'query_shard_exception', 'reason': 'Failed to parse query [x:(]',
+            'caused_by': {'type': 'parse_exception', 'reason': 'Encountered EOF'}}}]
+    return body
+
+
+async def test_all_searched_shards_failing_is_an_error(gateway):
+    # Seen live: shards skipped by the time filter plus failures on the rest -> HTTP 200, 0 hits.
+    gateway._client.options.return_value.search = AsyncMock(return_value=MagicMock(body=_shards(20, 10, skipped=10)))
+    with patch('utils.elasticsearch.get_access_token', return_value=token(['helpdesk'])), \
+            patch('utils.elasticsearch.audit') as audit:
+        with pytest.raises(ToolError, match=r'Failed to parse query \[x:\(\]: Encountered EOF'):
+            await gateway.search('ecs-microsoft-windows-v1', size=1)
+    assert audit.call_args.kwargs['outcome'] == 'error'
+
+
+async def test_partial_shard_failure_is_returned_and_audited(gateway):
+    gateway._client.options.return_value.search = AsyncMock(return_value=MagicMock(body=_shards(20, 5)))
+    with patch('utils.elasticsearch.get_access_token', return_value=token(['helpdesk'])), \
+            patch('utils.elasticsearch.audit') as audit:
+        body = await gateway.search('ecs-microsoft-windows-v1', size=1)
+    assert body['_shards']['failed'] == 5
+    assert audit.call_args.kwargs['outcome'] == 'partial' and audit.call_args.kwargs['shards_failed'] == 5

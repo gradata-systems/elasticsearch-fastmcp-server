@@ -5,8 +5,8 @@ roles:
   soc-analyst:
     indices:
       - ecs-microsoft-windows-*
-      - ecs-nginx-*
-      - ecs-fortinet-*
+      - ecs-ingress-nginx-*
+      - ecs-fortios-*
   helpdesk:
     indices:
       - ecs-microsoft-windows-*

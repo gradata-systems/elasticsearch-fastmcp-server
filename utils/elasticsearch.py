@@ -18,19 +18,31 @@ def gateway_from(ctx: Context) -> 'ElasticsearchGateway':
     return ctx.lifespan_context['es']
 
 
-def _error_reason(e: ApiError) -> str:
-    error = e.body.get('error') if isinstance(e.body, dict) else None
-    if not isinstance(error, dict):
-        return str(e)
+def _describe(error: dict[str, Any]) -> str:
     root = (error.get('root_cause') or [error])[0]
-    reason = root.get('reason') or error.get('reason') or str(e)
+    reason = root.get('reason') or error.get('reason') or error.get('type', 'unknown error')
     caused_by = (error.get('caused_by') or {}).get('reason')
     return f"{reason}: {caused_by}" if caused_by and caused_by != reason else reason
 
 
+def _error_reason(e: ApiError) -> str:
+    error = e.body.get('error') if isinstance(e.body, dict) else None
+    return _describe(error) if isinstance(error, dict) else str(e)
+
+
+def shard_failure(body: dict[str, Any]) -> str | None:
+    """Reason for the first shard failure in a search response, if any shard failed."""
+    shards = body.get('_shards') or {}
+    if not shards.get('failed'):
+        return None
+    failures = shards.get('failures') or [{}]
+    return _describe(failures[0].get('reason') or {})
+
+
 def _hits_summary(body: dict[str, Any]) -> dict[str, Any]:
-    hits = body.get('hits', {})
-    return {'took_ms': body.get('took'), 'hits_returned': len(hits.get('hits', [])), 'hits_total': hits.get('total')}
+    hits, shards = body.get('hits', {}), body.get('_shards', {})
+    return {'took_ms': body.get('took'), 'hits_returned': len(hits.get('hits', [])), 'hits_total': hits.get('total'),
+            'shards_failed': shards.get('failed', 0)}
 
 
 class ElasticsearchGateway:
@@ -103,7 +115,14 @@ class ElasticsearchGateway:
             raise ToolError("Elasticsearch is unavailable") from e
 
         body = response.body
-        audit('es_request', outcome='success', request=request, **summarize(body), **who)
+        shards = body.get('_shards') or {}
+        if shards.get('failed') and shards['failed'] >= shards.get('total', 0) - shards.get('skipped', 0):
+            # Every shard that ran the query failed, so the (empty) result is meaningless.
+            reason = shard_failure(body)
+            audit('es_request', outcome='error', error=reason, request=request, **who)
+            raise ToolError(f"Elasticsearch rejected the request: {reason}")
+        outcome = 'partial' if shards.get('failed') else 'success'
+        audit('es_request', outcome=outcome, request=request, **summarize(body), **who)
         return body
 
     async def search(self, index: str, **params: Any) -> dict[str, Any]:
@@ -112,7 +131,7 @@ class ElasticsearchGateway:
         return await self._execute('search', index, params,
                                    lambda c: c.search(index=index, **params), _hits_summary)
 
-    async def field_caps(self, index: str, fields: str) -> dict[str, Any]:
+    async def field_caps(self, index: str, fields: list[str]) -> dict[str, Any]:
         return await self._execute('field_caps', index, {'fields': fields},
                                    lambda c: c.field_caps(index=index, fields=fields),
                                    lambda body: {'fields_returned': len(body.get('fields', {}))})
