@@ -4,6 +4,7 @@ A pack names an index, explains its key fields for the model, and declares tools
 or top-values query with fixed filters plus a few named parameters. Adding a data source is a
 new YAML file, not new code; the generic tools remain available for anything a pack doesn't cover.
 """
+import fnmatch
 import logging
 import re
 from pathlib import Path
@@ -17,7 +18,8 @@ from pydantic import (BaseModel, ConfigDict, Field, ValidationError, create_mode
                       model_validator)
 from pydantic.json_schema import SkipJsonSchema
 
-from tools.generic import run_search, run_top_values
+from security.policy import matches_index_expression
+from tools.generic import retention_note, run_search, run_top_values
 from tools.query import Filter, TimeRange, build_query
 from utils.elasticsearch import gateway_from
 
@@ -90,6 +92,9 @@ class SourcePack(BaseModel):
     title: str
     description: str
     index: str
+    retention_days: int | None = Field(
+        default=None, ge=1,
+        description="How many days back every event is kept. Older periods hold only a long-term subset, or nothing.")
     timestamp_field: str = '@timestamp'
     key_fields: dict[str, str] = {}
     default_fields: list[str] = []
@@ -117,8 +122,16 @@ class SourcePack(BaseModel):
         with path.open(encoding='utf-8') as f:
             return cls.model_validate(yaml.safe_load(f))
 
+    def overlaps(self, index: str) -> bool:
+        """Whether searching `index` (a multi-target expression) may read this pack's data, either
+        because it names part of the pack's data or because it is a pattern broad enough to cover it."""
+        includes = [part for part in self.index.split(',') if not part.startswith('-')]
+        return any(matches_index_expression(target, self.index)
+                   or any(fnmatch.fnmatchcase(part, target) for part in includes)
+                   for target in index.split(',') if not target.startswith('-'))
+
     def summary(self) -> dict[str, Any]:
-        return {
+        summary = {
             'name': self.name,
             'title': self.title,
             'description': ' '.join(self.description.split()),
@@ -126,6 +139,9 @@ class SourcePack(BaseModel):
             'key_fields': self.key_fields,
             'tools': [t.name for t in self.tools],
         }
+        if self.retention_days:
+            summary['retention_days'] = self.retention_days
+        return summary
 
 
 def load_packs(directory: Path) -> list[SourcePack]:
@@ -186,6 +202,8 @@ class SourceTool(Tool):
                                       args.size, spec.sort, pack.timestamp_field)
         else:
             result = await run_top_values(es, pack.index, query, spec.field, args.size, spec.include_fields)
+        if note := retention_note([pack], pack.index, args.time_range.start):
+            result['note'] = note
         return self.convert_result(result)
 
 

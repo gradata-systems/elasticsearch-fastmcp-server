@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 
 from tools import generic
 from tools.query import Filter, TimeRange
@@ -130,3 +131,95 @@ async def test_tool_call_over_mcp_parses_json_arguments(es):
     assert query['filter'][0]['range']['@timestamp']['lte'] == '2026-09-01T23:59:59.999+00:00'
     assert query['filter'][1] == {'terms': {'event.code': [4624, '4625']}}
     assert query['must_not'] == [{'term': {'user.name': 'alice'}}]
+
+
+def _groups_page(buckets, after_key=None):
+    agg = {'buckets': [{'key': key, 'before': {'doc_count': b}, 'after': {'doc_count': a}}
+                       for key, b, a in buckets]}
+    if after_key:
+        agg['after_key'] = after_key
+    return {'aggregations': {'groups': agg}}
+
+
+BEFORE = TimeRange(start='2026-08-01', end='2026-08-10')  # 10 days
+AFTER = TimeRange(start='2026-08-11', end='2026-08-15')  # 5 days
+
+
+async def test_compare_periods_pages_through_groups_and_ranks_drops(es, ctx):
+    es.search = AsyncMock(side_effect=[
+        _groups_page([({'event.code': '4624'}, 1000, 0), ({'event.code': '4625'}, 100, 50)],
+                     after_key={'event.code': '4625'}),
+        _groups_page([({'event.code': '4688'}, 200, 20), ({'event.code': '4634'}, 3, 0),
+                      ({'event.code': '4672'}, 0, 40)]),
+    ])
+    result = await generic.compare_periods('i', ['event.code'], BEFORE, AFTER, ctx)
+
+    assert [(c['group']['event.code'], c['status']) for c in result['changes']] == [
+        ('4624', 'stopped'), ('4688', 'dropped')]
+    assert result['changes'][1] == {
+        'group': {'event.code': '4688'}, 'status': 'dropped', 'before_count': 200, 'after_count': 20,
+        'before_per_day': 20.0, 'after_per_day': 4.0, 'change_percent': -80}
+    assert result['groups_compared'] == 5 and result['groups_changed'] == 2
+    assert result['before_days'] == 10.0 and result['after_days'] == 5.0
+
+    first, second = (call.kwargs for call in es.search.call_args_list)
+    assert 'after' not in first['aggs']['groups']['composite']
+    assert second['aggs']['groups']['composite']['after'] == {'event.code': '4625'}
+    assert first['aggs']['groups']['composite']['sources'] == [{'event.code': {'terms': {'field': 'event.code'}}}]
+    periods = first['query']['bool']['filter'][0]['bool']['should']
+    assert periods[0] == first['aggs']['groups']['aggs']['before']['filter']
+    assert periods[1]['range']['@timestamp']['gte'].startswith('2026-08-11')
+
+
+async def test_compare_periods_reports_increases_when_asked(es, ctx):
+    es.search = AsyncMock(return_value=_groups_page([
+        ({'h': 'a'}, 100, 0), ({'h': 'b'}, 0, 40), ({'h': 'c'}, 10, 50), ({'h': 'd'}, 10, 5)]))
+    result = await generic.compare_periods('i', ['h'], BEFORE, AFTER, ctx, changes='up')
+    assert [(c['group']['h'], c['status'], c['change_percent']) for c in result['changes']] == [
+        ('c', 'increased', 900), ('b', 'new', None)]
+
+
+async def test_compare_periods_checks_each_period_separately(es, ctx):
+    es.search = AsyncMock(return_value=_groups_page([]))
+    # 1.5 years apart but each period is within the limit.
+    await generic.compare_periods('i', ['h'], TimeRange(start='2025-03-01', end='2025-03-31'), AFTER, ctx)
+    with pytest.raises(ToolError, match='maximum of 90 days'):
+        await generic.compare_periods('i', ['h'], TimeRange(start='2025-01-01', end='2025-12-31'), AFTER, ctx)
+    with pytest.raises(ToolError, match='must end before'):
+        await generic.compare_periods('i', ['h'], BEFORE, TimeRange(start='2026-08-05'), ctx)
+
+
+async def test_compare_periods_notes_empty_baseline_and_group_cap(es, ctx, monkeypatch):
+    monkeypatch.setattr(generic, '_COMPARE_MAX_GROUPS', 2)
+    es.search = AsyncMock(return_value=_groups_page([({'h': 'a'}, 0, 10), ({'h': 'b'}, 0, 10)], after_key={'h': 'b'}))
+    result = await generic.compare_periods('i', ['h'], BEFORE, AFTER, ctx)
+    assert es.search.await_count == 1
+    assert 'first 2 groups' in result['note'] and 'not be kept that far back' in result['note']
+
+
+def _days_ago(days):
+    from datetime import date, timedelta
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+async def test_search_notes_retention_of_covered_packs(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [
+        SourcePack(name='fw', title='Firewall', description='d', index='fw-*', retention_days=30),
+        SourcePack(name='win', title='Windows', description='d', index='win-*', retention_days=60)]
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 0}, 'hits': []}})
+
+    result = await generic.search_events('win-*,fw-*', TimeRange(start=_days_ago(45)), ctx)
+    assert result['note'].startswith('Firewall keeps every event for only 30 days')
+    result = await generic.search_events('win-*', TimeRange(start=_days_ago(45)), ctx)
+    assert 'note' not in result
+
+
+async def test_compare_periods_warns_when_baseline_predates_retention(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [SourcePack(name='w', title='Windows', description='d', index='win-*',
+                                                retention_days=60)]
+    es.search = AsyncMock(return_value=_groups_page([({'h': 'a'}, 10, 10)]))
+    result = await generic.compare_periods(
+        'win-*', ['h'], TimeRange(start=_days_ago(80), end=_days_ago(31)), TimeRange(start=_days_ago(30)), ctx)
+    assert 'only 60 days' in result['note'] and 'baseline is incomplete' in result['note']

@@ -154,3 +154,33 @@ async def test_invalid_arguments_rejected(es, windows, args):
         with pytest.raises(ToolError):
             await c.call_tool('windows_user_events', args)
     es.search.assert_not_called()
+
+
+@pytest.mark.parametrize('index, expected', [
+    ('ecs-microsoft-windows-*', True),           # the pack's own index
+    ('ecs-microsoft-windows-rs-*', True),        # one of its tiers
+    ('ecs-microsoft-windows-v1', True),
+    ('ecs-*', True),                             # a pattern that covers it
+    ('ecs-fortios-*', False),
+    ('ecs-fortios-*,-ecs-microsoft-*', False),   # exclusions are ignored, not treated as targets
+    ('ecs-fortios-*,ecs-microsoft-windows-v1', True),
+])
+def test_pack_overlaps(windows, index, expected):
+    assert windows.overlaps(index) is expected
+
+
+def test_repo_pack_summaries_include_retention_when_set():
+    summaries = {p.name: p.summary() for p in load_packs(REPO_PACKS)}
+    assert summaries['windows']['retention_days'] == 60 and summaries['fortios']['retention_days'] == 30
+    assert 'retention_days' not in summaries['ingress_nginx']
+
+
+async def test_pack_tool_notes_periods_older_than_retention(es, windows):
+    from datetime import date, timedelta
+    old = (date.today() - timedelta(days=75)).isoformat()
+    recent = (date.today() - timedelta(days=10)).isoformat()
+    async with Client(_server(es, [windows])) as c:
+        stale = await c.call_tool('windows_user_events', {'user': 'a', 'time_range': {'start': old}})
+        fresh = await c.call_tool('windows_user_events', {'user': 'a', 'time_range': {'start': recent}})
+    assert 'every event for only 60 days' in stale.structured_content['note']
+    assert 'note' not in fresh.structured_content

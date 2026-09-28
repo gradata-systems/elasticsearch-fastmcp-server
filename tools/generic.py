@@ -1,11 +1,13 @@
 """Source-agnostic tools that work against any index the caller may read."""
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from security.policy import matches_index_expression
-from tools.query import Filter, TimeRange, build_query, field_value, fit_to_budget
+from tools.query import Filter, TimeRange, bool_query, build_query, field_value, fit_to_budget
 from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
 
 Index = Annotated[str, Field(
@@ -20,6 +22,30 @@ QueryString = Annotated[str | None, Field(
                 "'event.action:logon-failed AND NOT user.name:svc_*'. Leading wildcards are not allowed.")]
 
 _TRUNCATED_HINT = "Output was truncated; narrow the time range, add filters, or request fewer fields."
+
+# compare_periods pages through every group with a composite aggregation, up to this many.
+_COMPARE_PAGE_SIZE = 1000
+_COMPARE_MAX_GROUPS = 10_000
+
+
+def retention_note(packs: list[Any], index: str, start: datetime) -> str | None:
+    """A caution when a period starting at `start` reaches back before a searched source keeps every event."""
+    limited = [p for p in packs if p.retention_days and p.overlaps(index)]
+    if not limited:
+        return None
+    pack = min(limited, key=lambda p: p.retention_days)
+    complete_since = datetime.now(timezone.utc) - timedelta(days=pack.retention_days)
+    if start >= complete_since:
+        return None
+    return (f"{pack.title} keeps every event for only {pack.retention_days} days (since "
+            f"{complete_since.date().isoformat()}); before that it holds only a subset, so fewer or no events "
+            f"there don't mean nothing happened.")
+
+
+def _add_retention_note(result: dict[str, Any], ctx: Context, index: str, start: datetime) -> dict[str, Any]:
+    if note := retention_note(ctx.lifespan_context.get('packs', []), index, start):
+        result['note'] = note
+    return result
 
 
 def _with_shard_warning(result: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
@@ -143,9 +169,10 @@ async def search_events(
     To count or rank values (e.g. top source IPs), use top_values instead.
     """
     es = gateway_from(ctx)
-    return await run_search(
+    result = await run_search(
         es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
         fields, size, sort, timestamp_field)
+    return _add_retention_note(result, ctx, index, time_range.start)
 
 
 async def top_values(
@@ -168,9 +195,144 @@ async def top_values(
     Useful for triage: top users, source IPs, event codes, URLs, destination ports and so on.
     """
     es = gateway_from(ctx)
-    return await run_top_values(
+    result = await run_top_values(
         es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
         field, size, include_fields)
+    return _add_retention_note(result, ctx, index, time_range.start)
+
+
+def _days(start: datetime, end: datetime) -> float:
+    return (end - start).total_seconds() / 86400
+
+
+def _classify(before: int, after: int, expected_after: float, min_change: float) -> str | None:
+    if before and not after:
+        return 'stopped'
+    if after and not before:
+        return 'new'
+    if after <= expected_after * (1 - min_change):
+        return 'dropped'
+    if after >= expected_after * (1 + min_change):
+        return 'increased'
+    return None
+
+
+_WANTED_CHANGES = {'down': {'stopped', 'dropped'}, 'up': {'new', 'increased'},
+                   'both': {'stopped', 'dropped', 'new', 'increased'}}
+
+
+async def compare_periods(
+        index: Index,
+        group_by: Annotated[list[str], Field(
+            min_length=1, max_length=4,
+            description="Keyword, numeric, ip or boolean fields whose values (or combinations of values) "
+                        "are compared, e.g. ['event.code'] or ['event.code', 'host.hostname'].")],
+        before: Annotated[TimeRange, Field(description="The baseline period.")],
+        after: Annotated[TimeRange, Field(
+            description="The period to compare with the baseline, e.g. from date X until now. "
+                        "Must start after 'before' ends.")],
+        ctx: Context,
+        changes: Annotated[Literal['down', 'up', 'both'], Field(
+            description="'down' for groups that stopped or dropped, 'up' for groups that are new or "
+                        "increased, 'both' for all of them.")] = 'down',
+        min_change_percent: Annotated[int, Field(
+            ge=1, le=100, description="Smallest change in events per day to report, as a percentage of "
+                                      "the baseline rate.")] = 50,
+        min_events: Annotated[int, Field(
+            ge=1, description="Ignore groups with fewer events than this in both periods, to skip noise "
+                              "from rare values.")] = 5,
+        filters: Filters = [],
+        query: QueryString = None,
+        size: Annotated[int, Field(ge=1, le=500, description="Maximum number of changed groups to return.")] = 50,
+        timestamp_field: TimestampField = '@timestamp',
+) -> dict[str, Any]:
+    """
+    Compare how often each value (or combination of values) of the group_by fields occurs in two
+    periods, and report the groups whose rate changed: event types or hosts that stopped, dropped,
+    appeared or increased since a date. Rates are per day, so the periods may differ in length, and
+    each period may be as long as the maximum time range. Keep the baseline within the source's
+    retention_days (see list_data_sources): before that only part of the data is kept, which skews
+    the comparison.
+    """
+    es = gateway_from(ctx)
+    max_days = es.settings.max_time_range_days
+    before_start, before_end = before.bounds(max_days)
+    after_start, after_end = after.bounds(max_days)
+    if before_end >= after_start:
+        raise ToolError("The 'before' period must end before the 'after' period starts")
+    before_days, after_days = _days(before_start, before_end), _days(after_start, after_end)
+    if not before_days or not after_days:
+        raise ToolError("Both periods must have a non-zero length")
+    # Fix 'now' once, so every page of the aggregation sees the same periods.
+    before_range = TimeRange(start=before_start, end=before_end).to_query(timestamp_field, max_days)
+    after_range = TimeRange(start=after_start, end=after_end).to_query(timestamp_field, max_days)
+
+    either_period = {'bool': {'should': [before_range, after_range], 'minimum_should_match': 1}}
+    search_query = bool_query([either_period], filters, query)
+    sources = [{f: {'terms': {'field': f}}} for f in group_by]
+    groups, failed_page, complete, after_key = [], {}, True, None
+    while True:
+        composite: dict[str, Any] = {'size': _COMPARE_PAGE_SIZE, 'sources': sources}
+        if after_key:
+            composite['after'] = after_key
+        aggs = {'groups': {'composite': composite,
+                           'aggs': {'before': {'filter': before_range}, 'after': {'filter': after_range}}}}
+        body = await es.search(index, size=0, query=search_query, aggs=aggs)
+        if not failed_page and shard_failure(body):
+            failed_page = body
+        agg = body['aggregations']['groups']
+        groups += [(b['key'], b['before']['doc_count'], b['after']['doc_count']) for b in agg['buckets']]
+        if not agg['buckets'] or 'after_key' not in agg:
+            break
+        if len(groups) >= _COMPARE_MAX_GROUPS:
+            complete = False
+            break
+        after_key = agg['after_key']
+
+    changed = []
+    for key, before_count, after_count in groups:
+        if max(before_count, after_count) < min_events:
+            continue
+        expected_after = before_count / before_days * after_days
+        status = _classify(before_count, after_count, expected_after, min_change_percent / 100)
+        if status not in _WANTED_CHANGES[changes]:
+            continue
+        changed.append((abs(after_count - expected_after), {
+            'group': key,
+            'status': status,
+            'before_count': before_count,
+            'after_count': after_count,
+            'before_per_day': round(before_count / before_days, 2),
+            'after_per_day': round(after_count / after_days, 2),
+            'change_percent': round((after_count / expected_after - 1) * 100) if before_count else None,
+        }))
+    # Biggest difference from the baseline rate first, so a stopped busy group outranks a quiet one.
+    changed.sort(key=lambda item: item[0], reverse=True)
+    rows, truncated = fit_to_budget([row for _, row in changed[:size]], es.settings.max_response_chars)
+
+    before_total, after_total = sum(g[1] for g in groups), sum(g[2] for g in groups)
+    result: dict[str, Any] = {
+        'before_days': round(before_days, 2), 'after_days': round(after_days, 2),
+        'before_events': before_total, 'after_events': after_total,
+        'groups_compared': len(groups), 'groups_changed': len(changed),
+        'returned': len(rows), 'changes': rows,
+    }
+    if truncated or len(rows) < len(changed):
+        result['truncated'] = True
+        result['hint'] = ("More groups changed than were returned; raise min_events or min_change_percent, "
+                          "or add filters.")
+    notes = []
+    if retention := retention_note(ctx.lifespan_context.get('packs', []), index, before_start):
+        notes.append(f"{retention} Groups may look new or increased only because the baseline is incomplete.")
+    if not complete:
+        notes.append(f"Only the first {len(groups)} groups were compared; add filters or group by fewer fields.")
+    if groups and not before_total:
+        notes.append("The 'before' period has no events at all; the data may not be kept that far back.")
+    elif groups and not after_total:
+        notes.append("The 'after' period has no events at all; ingestion may have stopped.")
+    if notes:
+        result['note'] = ' '.join(notes)
+    return _with_shard_warning(result, failed_page)
 
 
 async def esql_query(
@@ -203,4 +365,4 @@ async def esql_query(
     return result
 
 
-ALL_TOOLS = [list_data_sources, describe_fields, search_events, top_values, esql_query]
+ALL_TOOLS = [list_data_sources, describe_fields, search_events, top_values, compare_periods, esql_query]

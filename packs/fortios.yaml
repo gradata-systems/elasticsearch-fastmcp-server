@@ -1,6 +1,7 @@
 name: fortios
 title: FortiGate firewall logs (FortiOS)
 index: ecs-fortios-*
+retention_days: 30
 description: >
   Logs from the FortiGate firewall: forwarded traffic sessions, VPN negotiation and tunnel
   events, system events, and UTM events (application control, SSL inspection, intrusion

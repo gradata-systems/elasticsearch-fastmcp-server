@@ -40,12 +40,17 @@ class TimeRange(BaseModel):
             raise ValueError("end must not be before start")
         return self
 
-    def to_query(self, timestamp_field: str, max_days: int) -> dict[str, Any]:
+    def bounds(self, max_days: int) -> tuple[datetime, datetime]:
+        """Start and end (now, if open-ended), rejecting ranges longer than `max_days`."""
         end = self.end or datetime.now(timezone.utc)
         if end - self.start > timedelta(days=max_days):
             raise ToolError(f"Time range exceeds the maximum of {max_days} days; narrow it or split the query")
+        return self.start, end
+
+    def to_query(self, timestamp_field: str, max_days: int) -> dict[str, Any]:
+        start, end = self.bounds(max_days)
         return {'range': {timestamp_field: {
-            'gte': self.start.isoformat(timespec='milliseconds'),
+            'gte': start.isoformat(timespec='milliseconds'),
             'lte': end.isoformat(timespec='milliseconds'),
         }}}
 
@@ -89,14 +94,18 @@ class Filter(BaseModel):
 def build_query(time_range: TimeRange, timestamp_field: str, max_days: int,
                 filters: list[Filter], query: str | None, extra: list[dict[str, Any]] = ()) -> dict[str, Any]:
     """Bool query for the time range, filters and full-text query; `extra` clauses must also match."""
-    must = [time_range.to_query(timestamp_field, max_days)]
-    must += [f.to_query() for f in filters if not f.negate] + list(extra)
-    bool_query: dict[str, Any] = {'filter': must}
+    return bool_query([time_range.to_query(timestamp_field, max_days), *extra], filters, query)
+
+
+def bool_query(clauses: list[dict[str, Any]], filters: list[Filter], query: str | None) -> dict[str, Any]:
+    """Bool query requiring `clauses`, the filters and the full-text query."""
+    must = list(clauses) + [f.to_query() for f in filters if not f.negate]
+    result: dict[str, Any] = {'filter': must}
     if must_not := [f.to_query() for f in filters if f.negate]:
-        bool_query['must_not'] = must_not
+        result['must_not'] = must_not
     if query:
-        bool_query['must'] = [{'query_string': {'query': query, 'allow_leading_wildcard': False}}]
-    return {'bool': bool_query}
+        result['must'] = [{'query_string': {'query': query, 'allow_leading_wildcard': False}}]
+    return {'bool': result}
 
 
 def field_value(source: dict[str, Any], field: str) -> Any:

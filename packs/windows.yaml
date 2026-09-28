@@ -1,6 +1,7 @@
 name: windows
 title: Microsoft Windows security events
 index: ecs-microsoft-windows-*
+retention_days: 60
 description: >
   Windows event log records, mostly from the Security log, collected from domain controllers
   and servers and stored in Elastic Common Schema. Covers logons and logoffs, special privilege

@@ -34,6 +34,7 @@ Generic tools work against any index the caller may read, whatever its schema:
 | `describe_fields` | field names and types (field caps), filterable by pattern |
 | `search_events` | events in a time range with exact-match/range filters and an optional Lucene query |
 | `top_values` | most frequent values of a field (terms aggregation) |
+| `compare_periods` | groups (e.g. event types, hosts) whose daily rate stopped, dropped, appeared or rose between two periods |
 | `esql_query` | read-only ES\|QL, with the time range applied as a filter |
 
 Guardrails: every query needs a time range of at most `ES_MCP_MAX_TIME_RANGE_DAYS` (default 90)
@@ -50,6 +51,7 @@ built on it. Adding a source is a new YAML file, not new code:
 name: windows
 title: Microsoft Windows security events
 index: ecs-microsoft-windows-*   # names/patterns, comma-separated; '-' excludes, e.g. 'a-*,-a-debug-*,b'
+retention_days: 60          # optional: how far back every event is kept (the shortest tier)
 description: What the data is, what it's good for, and how far back each tier goes.
 key_fields:                 # shown to the model by list_data_sources
   user.name: Account logon name, e.g. 'john.smith1'
@@ -70,7 +72,10 @@ tools:
 When a source is split across retention tiers (for example a short-lived `-rs-*` index and a
 long-term `-v1` index, each event stored in only one), give the pack a pattern covering all of them
 and say in `description` how long each tier keeps data, so the model knows that older periods hold
-only a subset and an empty result there does not mean nothing happened.
+only a subset and an empty result there does not mean nothing happened. Also set `retention_days`
+to the shortest tier's retention: `list_data_sources` reports it, and the search, top-values and
+`compare_periods` tools add a `note` to their results whenever the requested period reaches further
+back, whether they're called with the pack's index or with a pattern that covers it.
 
 Every generated tool also takes the required `time_range` and a capped `size`, and goes through
 the same run-as, exposed-index and audit path as the generic tools. Packs whose index isn't in
