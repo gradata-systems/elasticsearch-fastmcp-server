@@ -65,7 +65,7 @@ The implementation will strictly follow the optimization suggestions derived fro
 
 # Delivery Steps
 
-###   Step 1: Update tool docstrings in main.py
+### * Step 1: Update tool docstrings in main.py
 Update the tool docstrings in `main.py` to use the optimized descriptions.
 
 - Update `get_windows_event_users`:

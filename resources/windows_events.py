@@ -1,18 +1,17 @@
-import json
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, field_validator, Field
 
-from utils.elasticsearch import query_elasticsearch, index_windows_events
+from utils.elasticsearch import ElasticsearchGateway
 
 logger = logging.getLogger(__name__)
 
 
 class DateRange(BaseModel):
-    start_date: Optional[str] = Field(description="Start date, inclusive, in YYYY-MM-DD format")
-    end_date: Optional[str] = Field(description="End date, inclusive, in YYYY-MM-DD format")
+    start_date: Optional[str] = Field(description="The start date, inclusive, in YYYY-MM-DD format.")
+    end_date: Optional[str] = Field(description="The end date, inclusive, in YYYY-MM-DD format.")
 
     @field_validator('start_date', 'end_date')
     def validate_date_format(cls, value):
@@ -25,7 +24,7 @@ class DateRange(BaseModel):
             raise ValueError("Invalid date format. Use YYYY-MM-DD")
 
 
-async def get_users(date_range: DateRange) -> str:
+async def get_users(es: ElasticsearchGateway, index: str, date_range: DateRange) -> dict[str, Any]:
     query = {
         "bool": {
             "must": [
@@ -65,27 +64,22 @@ async def get_users(date_range: DateRange) -> str:
         }
     }
 
-    print(f'Querying Windows events from {index_windows_events}')
-    response = await query_elasticsearch(index_windows_events, size=0, query=query, aggs=aggs)
-    if not response:
-        return json.dumps({
-            "error": f"Failed to query Elasticsearch index {index_windows_events}"
-        }, indent=2)
+    response = await es.search(index, size=0, query=query, aggs=aggs)
 
     users = []
     for bucket in response['aggregations']['users']['buckets']:
+        source = bucket['metadata']['hits']['hits'][0]['_source']
         users.append({
-            "id": bucket['metadata']['hits']['hits'][0]['_source'].get('user.id'),
+            "id": (source.get('user') or {}).get('id'),
             "login_name": bucket['key'],
             "event_count": bucket['doc_count']
         })
 
-    return json.dumps({
-        "users": users
-    }, indent=2)
+    return {"users": users}
 
 
-async def get_top_events_by_user(user: str, size: int, date_range: DateRange) -> str:
+async def get_top_events_by_user(es: ElasticsearchGateway, index: str, user: str, size: int,
+                                 date_range: DateRange) -> dict[str, Any]:
     query = {
         "bool": {
             "must": [
@@ -108,22 +102,12 @@ async def get_top_events_by_user(user: str, size: int, date_range: DateRange) ->
         }
     }
 
-    response = await query_elasticsearch(index_windows_events, size=size, query=query)
-    if not response:
-        return json.dumps({
-            "error": f"Failed to query Elasticsearch index {index_windows_events}"
-        }, indent=2)
-
-    events = []
-    for hit in response['hits']['hits']:
-        events.append(hit['_source'])
-
-    return json.dumps({
-        "events": events
-    })
+    response = await es.search(index, size=size, query=query)
+    return {"events": [hit['_source'] for hit in response['hits']['hits']]}
 
 
-async def get_remote_access_events_by_user(user: str, size: int, date_range: DateRange) -> str:
+async def get_remote_access_events_by_user(es: ElasticsearchGateway, index: str, user: str, size: int,
+                                           date_range: DateRange) -> dict[str, Any]:
     query = {
         "bool": {
             "must": [
@@ -175,16 +159,5 @@ async def get_remote_access_events_by_user(user: str, size: int, date_range: Dat
         }
     ]
 
-    response = await query_elasticsearch(index_windows_events, size=size, query=query, sort=sort)
-    if not response:
-        return json.dumps({
-            "error": f"Failed to query Elasticsearch index {index_windows_events}"
-        }, indent=2)
-
-    events = []
-    for hit in response['hits']['hits']:
-        events.append(hit['_source'])
-
-    return json.dumps({
-        "events": events
-    })
+    response = await es.search(index, size=size, query=query, sort=sort)
+    return {"events": [hit['_source'] for hit in response['hits']['hits']]}
