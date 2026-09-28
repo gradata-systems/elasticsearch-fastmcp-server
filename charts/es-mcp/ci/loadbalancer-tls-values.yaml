@@ -1,0 +1,13 @@
+# Rendered in CI: LoadBalancer with TLS from an existing Secret (the README example).
+publicBaseUrl: https://es-mcp.example.com
+elasticsearch:
+  url: https://es.example.svc:9200
+  impersonator: {existingSecret: es-mcp-impersonator}
+  ca: {secretName: es-ca}
+keycloak: {realmUrl: https://keycloak.example.com/realms/security}
+tls: {existingSecret: es-mcp-tls}
+service:
+  type: LoadBalancer
+  loadBalancerIP: 10.0.0.50
+  loadBalancerSourceRanges: [10.0.0.0/8]
+  externalTrafficPolicy: Local

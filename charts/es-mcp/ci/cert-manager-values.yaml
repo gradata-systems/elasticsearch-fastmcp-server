@@ -1,0 +1,16 @@
+# Rendered in CI: cert-manager certificate, overridden policy and packs, several replicas.
+publicBaseUrl: https://es-mcp.example.com
+elasticsearch:
+  url: https://es.example.svc:9200
+  impersonator: {password: not-a-real-password}
+keycloak: {realmUrl: https://keycloak.example.com/realms/security}
+tls:
+  certManager: {enabled: true, issuerRef: {name: internal-ca}}
+replicaCount: 2
+statelessHttp: true
+podDisruptionBudget: {enabled: true}
+accessPolicy:
+  exposed_indices: [ecs-*]
+  impersonable_users: ["*.*"]
+packs:
+  mini.yaml: {name: mini, title: Mini, description: CI pack, index: "a-*,-a-debug-*"}

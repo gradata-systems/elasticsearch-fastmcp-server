@@ -142,18 +142,32 @@ uv run python main.py
 Terminate TLS at your ingress, or set `ES_MCP_TLS_CERTFILE` / `ES_MCP_TLS_KEYFILE` to serve HTTPS
 directly. Tests: `uv run pytest`.
 
+## CI and releases
+
+`.github/workflows/ci.yml` runs the tests, lints and renders the chart against
+`charts/es-mcp/ci/*-values.yaml`, builds the image and smoke-tests it over TLS on every push and
+pull request. Pushes to `master` and `v*` tags publish the image to ghcr.io. To release, bump
+`version` and `appVersion` in `charts/es-mcp/Chart.yaml` (and `version` in `pyproject.toml`), then
+push a matching tag, e.g. `git tag v0.2.0 && git push origin v0.2.0`; a tag that doesn't match the
+chart fails the chart release.
+
 ## Deploying to Kubernetes
 
 The Helm chart in `charts/es-mcp` runs the server with TLS terminated by the server itself, so it
 can sit directly behind a `LoadBalancer` service (L4 pass-through) with no ingress controller.
 
-**1. Build and push the image.** The image bakes in `access_policy.yaml` and `packs/` as
-defaults; the chart can replace either without a rebuild.
+**1. Get the image.** CI publishes `ghcr.io/gradata-systems/elasticsearch-fastmcp-server`,
+tagged by branch (`master`), commit (`sha-<short>`) and release version (`0.1.0`, `0.1`). The image
+bakes in `access_policy.yaml` and `packs/` as defaults; the chart can replace either without a
+rebuild. To build your own instead:
 
 ```
-docker build -t ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.1.0 .
-docker push ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.1.0
+docker build -t <registry>/es-mcp:<tag> .
+docker push <registry>/es-mcp:<tag>      # then set image.repository and image.tag
 ```
+
+Release tags also publish the chart to `oci://ghcr.io/gradata-systems/charts/es-mcp`, so you can
+install from there instead of a checkout.
 
 **2. Create the secrets** in the target namespace (see *Elasticsearch setup* for the account):
 

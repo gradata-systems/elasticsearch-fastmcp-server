@@ -1,3 +1,4 @@
 .git/
 *.tgz
 .DS_Store
+ci/
