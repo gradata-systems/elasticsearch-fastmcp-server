@@ -5,6 +5,7 @@ record tying an Elasticsearch query to the OIDC identity that caused it.
 """
 import json
 import logging
+import logging.handlers
 import sys
 import time
 import uuid
@@ -29,11 +30,12 @@ def configure_audit_log(path: Path | None, cluster: str = '') -> None:
     """Send audit events to `path` (JSON lines) or stdout, separately from application logs.
 
     `cluster` names the cluster this deployment serves in every event, so trails from several
-    deployments can be told apart once collected together.
+    deployments can be told apart once collected together. The file is reopened when it is moved
+    or deleted, so an external tool such as logrotate can rotate it without a restart.
     """
     global _cluster
     _cluster = cluster
-    handler = logging.FileHandler(path, encoding='utf-8') if path else logging.StreamHandler(sys.stdout)
+    handler = logging.handlers.WatchedFileHandler(path, encoding='utf-8') if path else logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter('%(message)s'))
     audit_logger.handlers[:] = [handler]
     audit_logger.setLevel(logging.INFO)

@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -7,7 +8,7 @@ from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.auth.auth import AccessToken
 
-from security.audit import AuditMiddleware, audit, audit_logger
+from security.audit import AuditMiddleware, audit, audit_logger, configure_audit_log
 
 TOKEN = AccessToken(token='t', client_id='c', scopes=[], subject='alice-sub',
                     claims={'preferred_username': 'alice', 'azp': 'openwebui'})
@@ -60,3 +61,19 @@ async def test_middleware_records_success_and_failure_with_shared_call_id(record
         'ts': None, 'call_id': None, 'duration_ms': None, 'event': 'tool_call', 'sub': 'alice-sub',
         'username': 'alice', 'client_id': 'openwebui', 'tool': 'ok', 'arguments': {'x': 1}, 'outcome': 'success'}
     assert boom_call['outcome'] == 'error' and boom_call['error'] == 'nope'
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows cannot rename a file that is open')
+def test_audit_file_is_reopened_after_rotation(tmp_path):
+    path = tmp_path / 'audit.jsonl'
+    configure_audit_log(path)
+    try:
+        audit('tool_call', tool='before')
+        path.rename(tmp_path / 'audit.jsonl.1')
+        audit('tool_call', tool='after')
+    finally:
+        for handler in audit_logger.handlers:
+            handler.close()
+        audit_logger.handlers.clear()
+    assert json.loads((tmp_path / 'audit.jsonl.1').read_text())['tool'] == 'before'
+    assert json.loads(path.read_text())['tool'] == 'after'

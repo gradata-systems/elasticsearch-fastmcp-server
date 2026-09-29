@@ -8,6 +8,22 @@ On a Basic licence this is the **only record linking a query to a person**, beca
 Elasticsearch's own audit log is a paid feature. Ship it somewhere the people being investigated
 can't modify it.
 
+The server never rotates or deletes the audit file itself; retention is up to you. When writing to
+a file, rotate it with an external tool such as logrotate. The server notices when the file is
+moved or removed and reopens it at the configured path, so logrotate's default rename-and-create
+works without a restart. Don't use `copytruncate`, which can lose lines written during the copy.
+
+```
+/var/log/es-mcp/audit.jsonl {
+    daily
+    rotate 90
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+```
+
 ## Events
 
 | Event | When | Key fields |
