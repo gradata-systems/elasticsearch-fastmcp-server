@@ -3,5 +3,5 @@ publicBaseUrl: https://es-mcp.example.com
 elasticsearch:
   url: https://es.example.svc:9200
   impersonator: {existingSecret: es-mcp-impersonator}
-keycloak: {realmUrl: https://keycloak.example.com/realms/security}
+oidc: {issuer: https://idp.example.com}
 tls: {enabled: false}

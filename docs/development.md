@@ -16,7 +16,7 @@
 | `security/audit.py` | The audit log. |
 | `utils/elasticsearch.py` | The gateway every Elasticsearch request goes through: run-as, the index check, auditing and error handling. |
 | `packs/` | The built-in source packs. |
-| `keycloak/` | Keycloak client and client scope definitions. |
+| `keycloak/` | Example Keycloak client and client scope definitions. |
 | `charts/es-mcp/` | The Helm chart. |
 
 Keep the code independent of any data source or schema. Field names, index names and

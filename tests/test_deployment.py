@@ -91,7 +91,7 @@ def test_overlong_prefixed_names_are_rejected():
 
 def test_tool_prefix_must_be_lower_snake_case_ending_in_underscore():
     required = dict(es_url='https://es:9200', es_impersonator_username='u', es_impersonator_password='p',
-                    keycloak_realm_url='https://kc/realms/r', keycloak_audience='a', public_base_url='https://m')
+                    oidc_issuer='https://idp/realms/r', oidc_audience='a', public_base_url='https://m')
     assert Settings(**required, tool_prefix='prod_').tool_prefix == 'prod_'
     for bad in ('prod', 'Prod_', 'prod-'):
         with pytest.raises(ValidationError):

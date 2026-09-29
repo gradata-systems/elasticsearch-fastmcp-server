@@ -1,10 +1,10 @@
 {{- $es := .Values.elasticsearch }}
-{{- $kc := .Values.keycloak }}
+{{- $oidc := .Values.oidc }}
 {{- if and $es.ca.secretName $es.ca.configMapName }}
 {{- fail "set only one of elasticsearch.ca.secretName and elasticsearch.ca.configMapName" }}
 {{- end }}
-{{- if and $kc.ca.secretName $kc.ca.configMapName }}
-{{- fail "set only one of keycloak.ca.secretName and keycloak.ca.configMapName" }}
+{{- if and $oidc.ca.secretName $oidc.ca.configMapName }}
+{{- fail "set only one of oidc.ca.secretName and oidc.ca.configMapName" }}
 {{- end }}
 {{- if not (or $es.impersonator.existingSecret $es.impersonator.password) }}
 {{- fail "set elasticsearch.impersonator.existingSecret (or elasticsearch.impersonator.password)" }}
@@ -87,18 +87,22 @@ spec:
             - name: ES_MCP_ES_CA_CERTS
               value: /etc/es-mcp/es-ca/{{ $es.ca.key }}
             {{- end }}
-            - name: ES_MCP_KEYCLOAK_REALM_URL
-              value: {{ required "keycloak.realmUrl is required" .Values.keycloak.realmUrl | quote }}
-            - name: ES_MCP_KEYCLOAK_AUDIENCE
-              value: {{ required "keycloak.audience is required" .Values.keycloak.audience | quote }}
-            - name: ES_MCP_KEYCLOAK_TOKEN_ALGORITHM
-              value: {{ $kc.tokenAlgorithm | quote }}
-            {{- if or $kc.ca.secretName $kc.ca.configMapName }}
-            - name: ES_MCP_KEYCLOAK_CA_CERTS
-              value: /etc/es-mcp/keycloak-ca/{{ $kc.ca.key }}
+            - name: ES_MCP_OIDC_ISSUER
+              value: {{ required "oidc.issuer is required" $oidc.issuer | quote }}
+            - name: ES_MCP_OIDC_AUDIENCE
+              value: {{ required "oidc.audience is required" $oidc.audience | quote }}
+            {{- with $oidc.jwksUri }}
+            - name: ES_MCP_OIDC_JWKS_URI
+              value: {{ . | quote }}
+            {{- end }}
+            - name: ES_MCP_OIDC_TOKEN_ALGORITHM
+              value: {{ $oidc.tokenAlgorithm | quote }}
+            {{- if or $oidc.ca.secretName $oidc.ca.configMapName }}
+            - name: ES_MCP_OIDC_CA_CERTS
+              value: /etc/es-mcp/oidc-ca/{{ $oidc.ca.key }}
             {{- end }}
             - name: ES_MCP_USERNAME_CLAIM
-              value: {{ .Values.keycloak.usernameClaim | quote }}
+              value: {{ $oidc.usernameClaim | quote }}
             - name: ES_MCP_CLUSTER_NAME
               value: {{ .Values.cluster.name | quote }}
             - name: ES_MCP_CLUSTER_DESCRIPTION
@@ -164,9 +168,9 @@ spec:
               mountPath: /etc/es-mcp/es-ca
               readOnly: true
             {{- end }}
-            {{- if or $kc.ca.secretName $kc.ca.configMapName }}
-            - name: keycloak-ca
-              mountPath: /etc/es-mcp/keycloak-ca
+            {{- if or $oidc.ca.secretName $oidc.ca.configMapName }}
+            - name: oidc-ca
+              mountPath: /etc/es-mcp/oidc-ca
               readOnly: true
             {{- end }}
             {{- if .Values.accessPolicy }}
@@ -199,14 +203,14 @@ spec:
           configMap:
             name: {{ $es.ca.configMapName }}
         {{- end }}
-        {{- if $kc.ca.secretName }}
-        - name: keycloak-ca
+        {{- if $oidc.ca.secretName }}
+        - name: oidc-ca
           secret:
-            secretName: {{ $kc.ca.secretName }}
-        {{- else if $kc.ca.configMapName }}
-        - name: keycloak-ca
+            secretName: {{ $oidc.ca.secretName }}
+        {{- else if $oidc.ca.configMapName }}
+        - name: oidc-ca
           configMap:
-            name: {{ $kc.ca.configMapName }}
+            name: {{ $oidc.ca.configMapName }}
         {{- end }}
         {{- if .Values.accessPolicy }}
         - name: config

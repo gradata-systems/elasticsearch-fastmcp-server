@@ -78,8 +78,8 @@ jobs:
             -v "$PWD/tls:/etc/es-mcp/tls:ro" \
             -e ES_MCP_ES_URL=https://es.invalid:9200 \
             -e ES_MCP_ES_IMPERSONATOR_USERNAME=ci -e ES_MCP_ES_IMPERSONATOR_PASSWORD=ci \
-            -e ES_MCP_KEYCLOAK_REALM_URL=https://keycloak.invalid/realms/ci \
-            -e ES_MCP_KEYCLOAK_AUDIENCE=es-mcp -e ES_MCP_PUBLIC_BASE_URL=https://localhost:8443 \
+            -e ES_MCP_OIDC_ISSUER=https://idp.invalid/realms/ci \
+            -e ES_MCP_OIDC_AUDIENCE=es-mcp -e ES_MCP_PUBLIC_BASE_URL=https://localhost:8443 \
             -e ES_MCP_TLS_CERTFILE=/etc/es-mcp/tls/tls.crt -e ES_MCP_TLS_KEYFILE=/etc/es-mcp/tls/tls.key \
             es-mcp:ci
           for _ in $(seq 30); do

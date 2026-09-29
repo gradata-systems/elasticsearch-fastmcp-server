@@ -16,15 +16,16 @@ The server reads `ES_MCP_*` environment variables, or a `.env` file in its worki
 | `ES_MCP_ES_IMPERSONATOR_PASSWORD` | `elasticsearch.impersonator.existingSecret` (or `.password`) | required | Its password. In Kubernetes, prefer an existing secret. |
 | `ES_MCP_ES_REQUEST_TIMEOUT` | `elasticsearch.requestTimeout` | `30` | Seconds before an Elasticsearch request is abandoned. |
 
-### Keycloak and identity
+### Identity provider
 
 | Variable | Chart value | Default | Meaning |
 |---|---|---|---|
-| `ES_MCP_KEYCLOAK_REALM_URL` | `keycloak.realmUrl` | required | Realm URL, e.g. `https://keycloak.example.com/realms/security`. Must equal the tokens' `iss` exactly. |
-| `ES_MCP_KEYCLOAK_AUDIENCE` | `keycloak.audience` | required (chart: `es-mcp`) | Audience tokens must carry. |
-| `ES_MCP_KEYCLOAK_CA_CERTS` | `keycloak.ca.secretName` / `configMapName` / `key` | system CAs | CA file that signed Keycloak's HTTPS certificate, trusted in addition to the system CAs when the server fetches the realm's signing keys. Needed when Keycloak uses a private CA; otherwise every token is rejected. |
-| `ES_MCP_KEYCLOAK_TOKEN_ALGORITHM` | `keycloak.tokenAlgorithm` | `RS256` | Algorithm Keycloak signs access tokens with: the realm's, or the client's, *Access token signature algorithm*. |
-| `ES_MCP_USERNAME_CLAIM` | `keycloak.usernameClaim` | `preferred_username` | Token claim holding the Elasticsearch username. Must not be something users can edit. |
+| `ES_MCP_OIDC_ISSUER` | `oidc.issuer` | required | OpenID Connect issuer, e.g. `https://keycloak.example.com/realms/security`. Must equal the tokens' `iss` exactly. |
+| `ES_MCP_OIDC_AUDIENCE` | `oidc.audience` | required (chart: `es-mcp`) | Audience tokens must carry. |
+| `ES_MCP_OIDC_JWKS_URI` | `oidc.jwksUri` | from discovery | URL of the provider's signing keys. By default taken from `<issuer>/.well-known/openid-configuration`; set it only for a provider without a discovery document there. |
+| `ES_MCP_OIDC_CA_CERTS` | `oidc.ca.secretName` / `configMapName` / `key` | system CAs | CA file that signed the provider's HTTPS certificate, trusted in addition to the system CAs when the server fetches its discovery document and signing keys. Needed when the provider uses a private CA; otherwise every token is rejected. |
+| `ES_MCP_OIDC_TOKEN_ALGORITHM` | `oidc.tokenAlgorithm` | `RS256` | Algorithm the provider signs access tokens with. |
+| `ES_MCP_USERNAME_CLAIM` | `oidc.usernameClaim` | `preferred_username` | Token claim holding the Elasticsearch username. Must not be something users can edit. |
 | `ES_MCP_PUBLIC_BASE_URL` | `publicBaseUrl` | required | The URL clients connect to, e.g. `https://es-mcp.example.com`. Used in the OAuth metadata the server publishes, so it must match what clients use. |
 
 ### Deployment identity
@@ -83,8 +84,8 @@ ES_MCP_ES_CA_CERTS=/etc/es-mcp/es-ca.crt
 ES_MCP_ES_IMPERSONATOR_USERNAME=mcp_impersonator
 ES_MCP_ES_IMPERSONATOR_PASSWORD=change-me
 
-ES_MCP_KEYCLOAK_REALM_URL=https://keycloak.example.com/realms/security
-ES_MCP_KEYCLOAK_AUDIENCE=es-mcp
+ES_MCP_OIDC_ISSUER=https://keycloak.example.com/realms/security
+ES_MCP_OIDC_AUDIENCE=es-mcp
 ES_MCP_PUBLIC_BASE_URL=https://es-mcp.example.com
 
 ES_MCP_TLS_CERTFILE=/etc/es-mcp/tls.crt

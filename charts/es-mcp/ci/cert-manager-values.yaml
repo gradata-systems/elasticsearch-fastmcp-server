@@ -3,7 +3,7 @@ publicBaseUrl: https://es-mcp.example.com
 elasticsearch:
   url: https://es.example.svc:9200
   impersonator: {password: not-a-real-password}
-keycloak: {realmUrl: https://keycloak.example.com/realms/security}
+oidc: {issuer: https://idp.example.com}
 tls:
   certManager: {enabled: true, issuerRef: {name: internal-ca}}
 replicaCount: 2

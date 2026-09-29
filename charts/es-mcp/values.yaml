@@ -42,17 +42,20 @@ elasticsearch:
     configMapName: ""
     key: ca.crt
 
-keycloak:
-  # e.g. https://keycloak.example.com/realms/security
-  realmUrl: ""
+oidc:
+  # OpenID Connect provider's issuer URL; must equal the tokens' `iss` exactly,
+  # e.g. https://keycloak.example.com/realms/security or https://login.microsoftonline.com/<tenant>/v2.0
+  issuer: ""
   audience: es-mcp
+  # Signing keys endpoint. Empty: found through the issuer's /.well-known/openid-configuration.
+  jwksUri: ""
   # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
   usernameClaim: preferred_username
-  # Algorithm Keycloak signs access tokens with (realm or client "Access token signature algorithm").
+  # Algorithm the provider signs access tokens with.
   tokenAlgorithm: RS256
-  # CA that signed Keycloak's HTTPS certificate, for fetching the realm's signing keys. Needed when
-  # Keycloak uses a private CA; trusted in addition to the system CAs. May be the same Secret or
-  # ConfigMap as elasticsearch.ca.
+  # CA that signed the provider's HTTPS certificate, for fetching its discovery document and signing
+  # keys. Needed when the provider uses a private CA; trusted in addition to the system CAs. May be
+  # the same Secret or ConfigMap as elasticsearch.ca.
   ca:
     secretName: ""
     configMapName: ""

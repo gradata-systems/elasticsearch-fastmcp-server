@@ -14,8 +14,8 @@ SETTINGS = Settings(
     es_url='https://es.example:9200',
     es_impersonator_username='mcp_impersonator',
     es_impersonator_password='secret',
-    keycloak_realm_url='https://kc.example/realms/r',
-    keycloak_audience='es-mcp',
+    oidc_issuer='https://idp.example/realms/r',
+    oidc_audience='es-mcp',
     public_base_url='https://mcp.example',
     max_result_size=100,
 )

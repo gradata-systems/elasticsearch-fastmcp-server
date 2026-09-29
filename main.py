@@ -7,7 +7,7 @@ from starlette.responses import PlainTextResponse, Response
 
 from config import Settings
 from security.audit import AuditMiddleware, configure_audit_log
-from security.auth import keycloak_auth, keycloak_http_client
+from security.auth import oidc_auth, oidc_http_client
 from security.policy import AccessPolicy, Caller
 from sources.packs import exposed_packs, load_packs
 from tools import deployment
@@ -35,15 +35,15 @@ mcp = FastMCP(
     settings.cluster_name or "elasticsearch",
     instructions=deployment.server_instructions(settings, packs),
     lifespan=lifespan,
-    # The HTTP client lives as long as the process; it fetches Keycloak's signing keys.
-    auth=keycloak_auth(settings, keycloak_http_client(settings.keycloak_ca_certs)),
+    # The HTTP client lives as long as the process; it fetches the OIDC provider's signing keys.
+    auth=oidc_auth(settings, oidc_http_client(settings.oidc_ca_certs)),
     middleware=[AuditMiddleware()],
 )
 
 @mcp.custom_route('/healthz', methods=['GET'], include_in_schema=False)
 async def healthz(request: Request) -> Response:
     """Liveness and readiness probe. Unauthenticated, and deliberately independent of Elasticsearch
-    and Keycloak so an outage there doesn't restart every replica."""
+    and the OIDC provider so an outage there doesn't restart every replica."""
     return PlainTextResponse('ok')
 
 

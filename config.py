@@ -39,14 +39,16 @@ class Settings(BaseSettings):
     # Audit trail as JSON lines; stdout when unset (suits Kubernetes log shipping).
     audit_log_file: Path | None = None
 
-    # Keycloak (OAuth2 authorization server)
-    keycloak_realm_url: str
-    keycloak_audience: str
-    # CA that signed Keycloak's HTTPS certificate, trusted in addition to the system CAs when
-    # fetching the realm's signing keys. Needed when Keycloak uses a private CA.
-    keycloak_ca_certs: Path | None = None
-    # Algorithm Keycloak signs access tokens with (the realm's or client's token signature algorithm).
-    keycloak_token_algorithm: str = 'RS256'
+    # OpenID Connect provider that issues access tokens. The issuer must equal the tokens' `iss`
+    # exactly; the JWKS URI is found through the issuer's discovery document unless set.
+    oidc_issuer: str
+    oidc_audience: str
+    oidc_jwks_uri: str | None = None
+    # CA that signed the provider's HTTPS certificate, trusted in addition to the system CAs when
+    # fetching its discovery document and signing keys. Needed when the provider uses a private CA.
+    oidc_ca_certs: Path | None = None
+    # Algorithm the provider signs access tokens with.
+    oidc_token_algorithm: str = 'RS256'
     # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
     username_claim: str = 'preferred_username'
     public_base_url: str

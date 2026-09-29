@@ -6,13 +6,14 @@ what they reach.
 
 ## How a request is authorized
 
-1. **Authentication.** The client signs in with Keycloak and sends the access token with each MCP
-   request. The server checks the token's signature against the realm's JWKS, and checks that its
-   issuer is `ES_MCP_KEYCLOAK_REALM_URL` and its audience is `ES_MCP_KEYCLOAK_AUDIENCE` (`es-mcp`).
+1. **Authentication.** The client signs in with the OpenID Connect provider and sends the access
+   token with each MCP request. The server checks the token's signature against the provider's
+   JWKS, and checks that its issuer is `ES_MCP_OIDC_ISSUER` and its audience is
+   `ES_MCP_OIDC_AUDIENCE` (e.g. `es-mcp`).
    No particular OAuth scope is required.
 2. **Identity.** The token's username claim (`preferred_username` by default,
    `ES_MCP_USERNAME_CLAIM`) must name an Elasticsearch user of the same name: a person such as
-   `john.smith1`, or `service-account-<client-id>` for an agent.
+   `john.smith1`, or an agent's name, such as `service-account-<client-id>` on Keycloak.
 3. **Impersonation check.** The username must match a pattern in `impersonable_users` in
    `access_policy.yaml`. Some names are always refused, whatever the patterns say:
    - built-in accounts: `elastic`, `kibana`, `kibana_system`, `logstash_system`, `beats_system`,
@@ -45,7 +46,7 @@ exposed_indices:
 # impersonation account's run_as privilege. Built-in accounts such as 'elastic' are always refused.
 impersonable_users:
   - "*.*"                 # people, e.g. john.smith1
-  - "service-account-*"   # agents using Keycloak client credentials
+  - "service-account-*"   # e.g. Keycloak client-credentials agents
 ```
 
 Both lists are shell-style patterns (`*`, `?`, `[...]`) and both must be non-empty. Set the file's

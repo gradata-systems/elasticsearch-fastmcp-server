@@ -27,15 +27,16 @@ Give the server its credentials with `ES_MCP_ES_IMPERSONATOR_USERNAME` and
 
 ## 2. People
 
-Nothing to do if users already have Elasticsearch accounts with the same names as their Keycloak
-usernames, for example through the same LDAP/AD source. Their existing roles decide what they can
-query. If a user's Keycloak username has no Elasticsearch user of the same name, their requests
+Nothing to do if users already have Elasticsearch accounts with the same names as their identity
+provider usernames, for example through the same LDAP/AD source. Their existing roles decide what they can
+query. If a user's username has no Elasticsearch user of the same name, their requests
 are refused with `run_as_denied`.
 
 ## 3. Agents
 
-Each automation agent signs in to Keycloak with client credentials as the service account
-`service-account-<client-id>` (see [Keycloak setup](keycloak-setup.md)). Create a matching native
+Each automation agent signs in to the identity provider with client credentials. Its username is
+set by the provider, e.g. the service account `service-account-<client-id>` on Keycloak (see
+[Identity provider setup](identity-provider.md#3-agents)). Create a matching native
 user:
 
 ```

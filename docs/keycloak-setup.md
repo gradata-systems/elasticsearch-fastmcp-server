@@ -1,21 +1,16 @@
 # Keycloak setup (26.5)
 
-Clients authenticate with Keycloak and send the access token to the server. FastMCP's Keycloak
-integration needs Keycloak 26.6 or later for MCP clients to register themselves dynamically, so on
-26.5 **register each client in Keycloak up front**.
+Keycloak is one OpenID Connect provider the server works with. This page covers the
+Keycloak-specific steps; [Identity provider setup](identity-provider.md) describes what the server
+requires of any provider, and how to troubleshoot rejected tokens.
 
-## What the server accepts
+Set `ES_MCP_OIDC_ISSUER` to the realm's public URL, e.g.
+`https://keycloak.example.com/realms/security`, and `ES_MCP_OIDC_AUDIENCE` to `es-mcp`. The server
+finds the realm's signing keys through its discovery document. MCP clients can only register
+themselves dynamically on Keycloak 26.6 or later, so on 26.5 **register each client up front**.
 
-A token is accepted only when all of these hold:
-
-- It is issued by `ES_MCP_KEYCLOAK_REALM_URL`. The `iss` claim must match exactly, so use the
-  realm's public URL, e.g. `https://keycloak.example.com/realms/security`.
-- It has the audience `ES_MCP_KEYCLOAK_AUDIENCE` (`aud: es-mcp`).
-- Its `preferred_username` (or the claim set in `ES_MCP_USERNAME_CLAIM`) names an impersonable user
-  (see [Access control](access-control.md)).
-
-No particular OAuth scope is required. The `es-mcp` client scope supplies both the audience and
-the username, so it must be a **default** scope on every client that calls the server.
+The `es-mcp` client scope supplies both the audience and the username, so it must be a
+**default** scope on every client that calls the server.
 
 ## Definitions in `keycloak/`
 
@@ -80,39 +75,21 @@ usernames read-only from LDAP/AD.
 
 ## Several deployments
 
-When you run one deployment per Elasticsearch cluster (see
-[Several clusters](deployment.md#several-clusters)), all of them can use the same `es-mcp`
-audience and client scope, and the same chat and agent clients. A token issued for one deployment
-is then accepted by the others. That's intended: the server adds no access of its own, and each
-cluster applies the user's own roles for that cluster. A user without an account or role on a
-cluster gets `run_as_denied` or `elasticsearch_403` there.
+Every deployment can share the `es-mcp` client scope and the chat and agent clients (see
+[Several deployments](identity-provider.md#several-deployments)). To limit a token to one
+deployment, give that deployment its own audience and a client scope that adds it.
 
-If you ever need a token to work only at one deployment, give that deployment its own audience
-(`ES_MCP_KEYCLOAK_AUDIENCE`) and a client scope that adds it.
+## Keycloak-specific causes of "invalid token"
 
-Chat clients register each deployment as a separate MCP server. Add each deployment's callback
-URL to the chat client's `redirectUris` if the client shows a different one per server.
+See [Troubleshooting](identity-provider.md#troubleshooting-invalid-token) for the log messages.
+On Keycloak:
 
-## Troubleshooting "invalid token"
-
-Every rejected token gets the same `401 invalid_token` response. The reason is in the server's
-log, as a line starting `Bearer token rejected`:
-
-```
-kubectl -n es-mcp logs deploy/es-mcp | grep "Bearer token rejected"
-```
-
-| Log message | Cause | Fix |
-|---|---|---|
-| `couldn't get its signing key from …/certs: … CERTIFICATE_VERIFY_FAILED` | Keycloak's HTTPS certificate is from a CA the server doesn't trust. | Set `ES_MCP_KEYCLOAK_CA_CERTS` (chart: `keycloak.ca`). |
-| `couldn't get its signing key from …` with a connection error | The server can't reach the realm URL. | Allow the pod to reach Keycloak at `ES_MCP_KEYCLOAK_REALM_URL`. |
-| `signed with ES256, but only RS256 is accepted` | The realm or client signs access tokens with another algorithm. | Set `ES_MCP_KEYCLOAK_TOKEN_ALGORITHM` (chart: `keycloak.tokenAlgorithm`) to match. |
-| `issuer mismatch (got …, expected …)` | The token was issued through a different URL than the configured realm URL, e.g. an internal service name. Keycloak writes the URL it was reached through into `iss`. | Have the client reach Keycloak through the realm's public URL, or set Keycloak's hostname (`KC_HOSTNAME`) so `iss` is always the public URL. |
-| `audience mismatch (got …, expected …)` | The `es-mcp` client scope isn't a default scope of the client that got the token. | Add it (see [step 1](#1-create-the-client-scope-and-clients)). |
-| `token expired` | The client sent an access token past its lifetime (5 minutes by default in Keycloak). | Make the client refresh its tokens, or lengthen the realm's access token lifespan. |
-
-Decode the token the client actually sends to see its header and claims: the first two parts of
-the JWT are base64url JSON. Check `alg`, `iss`, `aud` and `exp`.
-
-If no `Bearer token rejected` line appears at all, the request didn't carry a token the server
-could read. Set `FASTMCP_LOG_LEVEL=DEBUG` (chart: `extraEnv`) to see more.
+- `issuer mismatch`: Keycloak writes the URL it was reached through into `iss`. Have clients reach
+  it through the realm's public URL, or set Keycloak's hostname (`KC_HOSTNAME`) so `iss` is always
+  the public URL.
+- `audience mismatch`: the `es-mcp` client scope isn't a default scope of the client that got the
+  token. Add it (see [step 1](#1-create-the-client-scope-and-clients)).
+- `signed with …, but only RS256 is accepted`: set `ES_MCP_OIDC_TOKEN_ALGORITHM` to the realm's,
+  or the client's, *Access token signature algorithm*.
+- `token expired`: access tokens last 5 minutes by default; the realm's *Access Token Lifespan*
+  sets it.

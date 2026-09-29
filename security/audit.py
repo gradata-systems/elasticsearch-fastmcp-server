@@ -1,7 +1,7 @@
 """Structured audit trail: one JSON object per line on the 'audit' logger.
 
 Elasticsearch audit logging is not available on a Basic license, so this is the only
-record tying an Elasticsearch query to the Keycloak identity that caused it.
+record tying an Elasticsearch query to the OIDC identity that caused it.
 """
 import json
 import logging

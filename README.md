@@ -1,7 +1,7 @@
 # Elasticsearch FastMCP server
 
 MCP server that lets agents and chat clients query Elasticsearch for automation and security
-investigations, with OAuth2 (Keycloak) authentication, per-user Elasticsearch authorization and an
+investigations, with OAuth2 (any OpenID Connect provider) authentication, per-user Elasticsearch authorization and an
 audit trail.
 
 - **Runs as the caller.** Every query runs with the caller's own Elasticsearch roles, through
@@ -41,8 +41,8 @@ cp .env.example .env   # fill in
 uv run python main.py  # MCP endpoint at /mcp
 ```
 
-This needs an impersonation account in Elasticsearch and clients registered in Keycloak (see
-below). For Kubernetes, use the Helm chart in `charts/es-mcp`.
+This needs an impersonation account in Elasticsearch and clients registered with an OpenID
+Connect provider (see below). For Kubernetes, use the Helm chart in `charts/es-mcp`.
 
 ## Documentation
 
@@ -51,7 +51,8 @@ below). For Kubernetes, use the Helm chart in `charts/es-mcp`.
 | [Tool guide](docs/tools.md) | Every tool, with guidance, arguments and examples |
 | [Access control](docs/access-control.md) | How requests are authorized, and `access_policy.yaml` |
 | [Elasticsearch setup](docs/elasticsearch-setup.md) | The impersonation account, and users for agents |
-| [Keycloak setup](docs/keycloak-setup.md) | The client scope, chat clients and agents |
+| [Identity provider setup](docs/identity-provider.md) | What tokens must carry, chat clients, agents and troubleshooting |
+| [Keycloak setup](docs/keycloak-setup.md) | Ready-made Keycloak client scope and clients |
 | [Configuration](docs/configuration.md) | Every setting, with defaults and chart values |
 | [Source packs](docs/source-packs.md) | Describing a data source and its tools in YAML |
 | [Audit log](docs/audit-log.md) | Audit events and fields |

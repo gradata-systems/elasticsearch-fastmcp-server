@@ -5,8 +5,8 @@ exposed_indices:
   - ecs-ingress-nginx-*
   - ecs-fortios-*
 
-# Usernames (the token's preferred_username) the server may run as. Keep in step with the
+# Usernames (the token's username claim) the server may run as. Keep in step with the
 # impersonation account's run_as privilege. Built-in accounts such as 'elastic' are always refused.
 impersonable_users:
   - "*.*"                 # people, e.g. john.smith1
-  - "service-account-*"   # agents using Keycloak client credentials
+  - "service-account-*"   # e.g. Keycloak client-credentials agents

@@ -1,6 +1,7 @@
 # Deployment
 
-Before deploying, set up [Elasticsearch](elasticsearch-setup.md) and [Keycloak](keycloak-setup.md).
+Before deploying, set up [Elasticsearch](elasticsearch-setup.md) and your
+[identity provider](identity-provider.md).
 All settings are described in [Configuration](configuration.md).
 
 - [Running locally](#running-locally)
@@ -71,9 +72,9 @@ and covers the host of `publicBaseUrl`, unless you set `tls.certManager.dnsNames
 If the CA is in a ConfigMap rather than a secret, set `elasticsearch.ca.configMapName` instead of
 `secretName`. Leave both empty to use the system CAs.
 
-If Keycloak's HTTPS certificate is also from a private CA, set `keycloak.ca` in the same way. It
-can point at the same secret. The server fetches the realm's signing keys over HTTPS; without the
-CA, that fetch fails and every token is rejected as invalid.
+If the identity provider's HTTPS certificate is also from a private CA, set `oidc.ca` in the same
+way. It can point at the same secret. The server fetches the provider's signing keys over HTTPS;
+without the CA, that fetch fails and every token is rejected as invalid.
 
 ### 2. Write a values file
 
@@ -87,10 +88,10 @@ elasticsearch:
     existingSecret: es-mcp-impersonator
   ca:
     secretName: es-ca
-keycloak:
-  realmUrl: https://keycloak.example.com/realms/security
+oidc:
+  issuer: https://keycloak.example.com/realms/security
   audience: es-mcp
-  # ca: {secretName: es-ca}                 # if Keycloak's certificate is from a private CA
+  # ca: {secretName: es-ca}                 # if the provider's certificate is from a private CA
 tls:
   existingSecret: es-mcp-tls
   # certManager: {enabled: true, issuerRef: {name: internal-ca, kind: ClusterIssuer}}
@@ -161,7 +162,8 @@ Pods restart automatically when the policy, packs or a chart-managed password ch
   `externalIPs`.
 - **TLS elsewhere.** If TLS is terminated in front of the server, by an ingress or a
   TLS-terminating load balancer, set `tls.enabled: false`. The service then listens on port 80.
-- **Probes.** `/healthz` is unauthenticated and doesn't depend on Elasticsearch or Keycloak, so an
+- **Probes.** `/healthz` is unauthenticated and doesn't depend on Elasticsearch or the identity
+  provider, so an
   outage there doesn't restart the pods.
 - **Hardening.** Pods run as a non-root user with a read-only root filesystem, no capabilities
   and no Kubernetes API token. The server never calls the Kubernetes API.
@@ -225,19 +227,21 @@ Then add both servers to the agent. What each setting does for it:
 - **Audit.** Every audit event carries the cluster name, so trails from several deployments can
   be collected in one place and still told apart.
 
-Every deployment can share Keycloak's `es-mcp` audience and client registrations. Each cluster's
-own Elasticsearch roles decide what a user can see there (see
-[Keycloak setup](keycloak-setup.md#several-deployments)).
+Every deployment can share the identity provider's audience and client registrations. Each
+cluster's own Elasticsearch roles decide what a user can see there (see
+[Identity provider setup](identity-provider.md#several-deployments)).
 
 ## Connecting clients
 
-Clients connect to `<publicBaseUrl>/mcp` over streamable HTTP and authenticate with a Keycloak
-access token.
+Clients connect to `<publicBaseUrl>/mcp` over streamable HTTP and authenticate with an access
+token from the identity provider.
 
 - **Chat clients**, such as OpenWebUI: add an MCP server with that URL and OAuth authentication,
-  using the client registered from `keycloak/client-chat.json`. Users sign in as themselves.
-- **Agents**: get a token with client credentials (see [Keycloak setup](keycloak-setup.md#3-agents))
-  and send it as `Authorization: Bearer <token>`.
+  using the client registered for it (on Keycloak, from `keycloak/client-chat.json`). Users sign
+  in as themselves.
+- **Agents**: get a token with client credentials (see
+  [Identity provider setup](identity-provider.md#3-agents)) and send it as
+  `Authorization: Bearer <token>`.
 
 A request without a valid token gets `401`. A quick check from the command line:
 
