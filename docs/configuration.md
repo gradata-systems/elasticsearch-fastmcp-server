@@ -22,6 +22,8 @@ The server reads `ES_MCP_*` environment variables, or a `.env` file in its worki
 |---|---|---|---|
 | `ES_MCP_KEYCLOAK_REALM_URL` | `keycloak.realmUrl` | required | Realm URL, e.g. `https://keycloak.example.com/realms/security`. Must equal the tokens' `iss` exactly. |
 | `ES_MCP_KEYCLOAK_AUDIENCE` | `keycloak.audience` | required (chart: `es-mcp`) | Audience tokens must carry. |
+| `ES_MCP_KEYCLOAK_CA_CERTS` | `keycloak.ca.secretName` / `configMapName` / `key` | system CAs | CA file that signed Keycloak's HTTPS certificate, trusted in addition to the system CAs when the server fetches the realm's signing keys. Needed when Keycloak uses a private CA; otherwise every token is rejected. |
+| `ES_MCP_KEYCLOAK_TOKEN_ALGORITHM` | `keycloak.tokenAlgorithm` | `RS256` | Algorithm Keycloak signs access tokens with: the realm's, or the client's, *Access token signature algorithm*. |
 | `ES_MCP_USERNAME_CLAIM` | `keycloak.usernameClaim` | `preferred_username` | Token claim holding the Elasticsearch username. Must not be something users can edit. |
 | `ES_MCP_PUBLIC_BASE_URL` | `publicBaseUrl` | required | The URL clients connect to, e.g. `https://es-mcp.example.com`. Used in the OAuth metadata the server publishes, so it must match what clients use. |
 

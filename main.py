@@ -2,12 +2,12 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastmcp import FastMCP
-from fastmcp.server.auth.providers.keycloak import KeycloakAuthProvider
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
 from config import Settings
 from security.audit import AuditMiddleware, configure_audit_log
+from security.auth import keycloak_auth, keycloak_http_client
 from security.policy import AccessPolicy, Caller
 from sources.packs import exposed_packs, load_packs
 from tools import deployment
@@ -35,14 +35,8 @@ mcp = FastMCP(
     settings.cluster_name or "elasticsearch",
     instructions=deployment.server_instructions(settings, packs),
     lifespan=lifespan,
-    auth=KeycloakAuthProvider(
-        realm_url=settings.keycloak_realm_url,
-        base_url=settings.public_base_url,
-        audience=settings.keycloak_audience,
-        # The default requires 'openid', which client-credentials agents only get when they ask
-        # for it. Access rests on the issuer, the es-mcp audience and the username claim instead.
-        required_scopes=[],
-    ),
+    # The HTTP client lives as long as the process; it fetches Keycloak's signing keys.
+    auth=keycloak_auth(settings, keycloak_http_client(settings.keycloak_ca_certs)),
     middleware=[AuditMiddleware()],
 )
 

@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Keycloak (OAuth2 authorization server)
     keycloak_realm_url: str
     keycloak_audience: str
+    # CA that signed Keycloak's HTTPS certificate, trusted in addition to the system CAs when
+    # fetching the realm's signing keys. Needed when Keycloak uses a private CA.
+    keycloak_ca_certs: Path | None = None
+    # Algorithm Keycloak signs access tokens with (the realm's or client's token signature algorithm).
+    keycloak_token_algorithm: str = 'RS256'
     # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
     username_claim: str = 'preferred_username'
     public_base_url: str

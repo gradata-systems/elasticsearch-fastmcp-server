@@ -71,6 +71,10 @@ and covers the host of `publicBaseUrl`, unless you set `tls.certManager.dnsNames
 If the CA is in a ConfigMap rather than a secret, set `elasticsearch.ca.configMapName` instead of
 `secretName`. Leave both empty to use the system CAs.
 
+If Keycloak's HTTPS certificate is also from a private CA, set `keycloak.ca` in the same way. It
+can point at the same secret. The server fetches the realm's signing keys over HTTPS; without the
+CA, that fetch fails and every token is rejected as invalid.
+
 ### 2. Write a values file
 
 For example, `es-mcp-values.yaml`:
@@ -86,6 +90,7 @@ elasticsearch:
 keycloak:
   realmUrl: https://keycloak.example.com/realms/security
   audience: es-mcp
+  # ca: {secretName: es-ca}                 # if Keycloak's certificate is from a private CA
 tls:
   existingSecret: es-mcp-tls
   # certManager: {enabled: true, issuerRef: {name: internal-ca, kind: ClusterIssuer}}

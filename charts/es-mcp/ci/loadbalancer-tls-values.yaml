@@ -4,7 +4,7 @@ elasticsearch:
   url: https://es.example.svc:9200
   impersonator: {existingSecret: es-mcp-impersonator}
   ca: {secretName: es-ca}
-keycloak: {realmUrl: https://keycloak.example.com/realms/security}
+keycloak: {realmUrl: https://keycloak.example.com/realms/security, ca: {secretName: es-ca}}
 tls: {existingSecret: es-mcp-tls}
 service:
   type: LoadBalancer

@@ -48,6 +48,15 @@ keycloak:
   audience: es-mcp
   # Token claim holding the caller's Elasticsearch username. Must not be user-editable.
   usernameClaim: preferred_username
+  # Algorithm Keycloak signs access tokens with (realm or client "Access token signature algorithm").
+  tokenAlgorithm: RS256
+  # CA that signed Keycloak's HTTPS certificate, for fetching the realm's signing keys. Needed when
+  # Keycloak uses a private CA; trusted in addition to the system CAs. May be the same Secret or
+  # ConfigMap as elasticsearch.ca.
+  ca:
+    secretName: ""
+    configMapName: ""
+    key: ca.crt
 
 limits:
   maxResultSize: 500

@@ -92,3 +92,27 @@ If you ever need a token to work only at one deployment, give that deployment it
 
 Chat clients register each deployment as a separate MCP server. Add each deployment's callback
 URL to the chat client's `redirectUris` if the client shows a different one per server.
+
+## Troubleshooting "invalid token"
+
+Every rejected token gets the same `401 invalid_token` response. The reason is in the server's
+log, as a line starting `Bearer token rejected`:
+
+```
+kubectl -n es-mcp logs deploy/es-mcp | grep "Bearer token rejected"
+```
+
+| Log message | Cause | Fix |
+|---|---|---|
+| `couldn't get its signing key from …/certs: … CERTIFICATE_VERIFY_FAILED` | Keycloak's HTTPS certificate is from a CA the server doesn't trust. | Set `ES_MCP_KEYCLOAK_CA_CERTS` (chart: `keycloak.ca`). |
+| `couldn't get its signing key from …` with a connection error | The server can't reach the realm URL. | Allow the pod to reach Keycloak at `ES_MCP_KEYCLOAK_REALM_URL`. |
+| `signed with ES256, but only RS256 is accepted` | The realm or client signs access tokens with another algorithm. | Set `ES_MCP_KEYCLOAK_TOKEN_ALGORITHM` (chart: `keycloak.tokenAlgorithm`) to match. |
+| `issuer mismatch (got …, expected …)` | The token was issued through a different URL than the configured realm URL, e.g. an internal service name. Keycloak writes the URL it was reached through into `iss`. | Have the client reach Keycloak through the realm's public URL, or set Keycloak's hostname (`KC_HOSTNAME`) so `iss` is always the public URL. |
+| `audience mismatch (got …, expected …)` | The `es-mcp` client scope isn't a default scope of the client that got the token. | Add it (see [step 1](#1-create-the-client-scope-and-clients)). |
+| `token expired` | The client sent an access token past its lifetime (5 minutes by default in Keycloak). | Make the client refresh its tokens, or lengthen the realm's access token lifespan. |
+
+Decode the token the client actually sends to see its header and claims: the first two parts of
+the JWT are base64url JSON. Check `alg`, `iss`, `aud` and `exp`.
+
+If no `Bearer token rejected` line appears at all, the request didn't carry a token the server
+could read. Set `FASTMCP_LOG_LEVEL=DEBUG` (chart: `extraEnv`) to see more.
