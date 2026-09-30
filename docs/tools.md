@@ -103,6 +103,32 @@ values, since that's faster and matches what you meant.
 The field the time range applies to. Defaults to `@timestamp`. Pack tools use the pack's own
 setting.
 
+### Checks before a query runs
+
+Elasticsearch rejects malformed requests itself, and the tool returns its reason. Some mistakes
+are valid requests, though, and quietly return nothing or too much. The generic tools catch these
+before they run and return an error that says how to fix the call:
+
+- **Fields.** Every field named in `filters`, `query`, `field`, `group_by` and `timestamp_field` is
+  looked up with one field capabilities request. The call is refused if:
+  - the field doesn't exist; the error suggests similar field names, such as `user.name` for
+    `User.Name` or `name`;
+  - the field is an object rather than a field;
+  - an `eq`, `in` or `prefix` filter is on a `text` field; the error suggests a keyword subfield
+    if there is one;
+  - a `field` or `group_by` field can't be aggregated;
+  - `timestamp_field` isn't a date.
+
+  Wildcard names and metadata fields such as `_id` aren't checked, and neither are `fields` and
+  `include_fields`, which only choose what to return.
+- **Lucene.** A `query` is refused if it has lowercase `and`, `or` or `not` outside quotes, which
+  Lucene searches for as words, or `==`, `=`, `!=`, `<`, `>` in place of `field:value`.
+- **ES|QL.** See [esql_query](#esql_query). Elasticsearch checks the query's syntax and field names
+  itself.
+
+Pack tools skip these checks. Their fields and queries are fixed in the pack, and callers only
+supply values.
+
 ## What results look like
 
 Each tool returns a JSON object, and some keys appear in any result:
@@ -437,6 +463,9 @@ other tools when they fit, because they check arguments and explain their result
 - The indices in `FROM` and any `LOOKUP JOIN` are checked against the exposed patterns. Subqueries
   and comments inside the `FROM` clause are rejected.
 - Retention notes work as for the other tools, based on the indices in `FROM`.
+- Double quotes make a string, so `WHERE "host.name" == "a"` compares two constants and matches
+  nothing. Queries that compare or group by a quoted string like this are rejected with a hint to
+  write the field bare, or in backticks if it contains special characters.
 
 ---
 

@@ -16,7 +16,18 @@ def es():
     gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
                                   max_aggregation_range_days=366,
                                   tool_prefix="", cluster_name="", cluster_description="")
+    gw.field_caps = AsyncMock(side_effect=lambda index, fields: mapping(*fields))
     return gw
+
+
+def mapping(*names: str, **types: str) -> dict:
+    """A field_caps response with `names` as keyword fields (dates if named like a timestamp) and `types`
+    giving other fields' types by name, with '__' for '.'."""
+    def caps(kind):
+        return {kind: {'type': kind, 'aggregatable': kind not in ('text', 'object')}}
+    fields = {n: caps('date' if 'timestamp' in n or n == 'ts' else 'keyword') for n in names if '*' not in n}
+    fields |= {name.replace('__', '.'): caps(kind) for name, kind in types.items()}
+    return {'indices': ['i'], 'fields': fields}
 
 
 @pytest.fixture
@@ -109,6 +120,13 @@ async def test_esql_applies_time_filter_and_caps_rows(es, ctx):
     assert result['rows'] == [{'n': 'a', 'c': 1}, {'n': 'b', 'c': 2}] and result['truncated']
     query, time_filter = es.esql.call_args.args
     assert 'ts' in time_filter['range']
+
+
+async def test_esql_rejects_double_quoted_field_names(es, ctx):
+    es.esql = AsyncMock()
+    with pytest.raises(ToolError, match='"Field.Name" is a string, not a field name'):
+        await generic.esql_query('FROM i | WHERE "Field.Name" == "Value" | STATS c = COUNT(*)', TR, ctx)
+    es.esql.assert_not_called()
 
 
 async def test_tool_call_over_mcp_parses_json_arguments(es):

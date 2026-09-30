@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastmcp import Client, FastMCP
+from fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from config import Settings
@@ -132,8 +133,12 @@ async def test_list_data_sources_names_the_cluster_and_prefixed_tools():
 async def test_top_values_hint_uses_the_prefixed_tool_name():
     mcp, es = _server(_settings('prod_'), [])
     es.search = AsyncMock(return_value={'hits': {'total': {'value': 5}}, 'aggregations': {'top': {'buckets': []}}})
+    es.field_caps = AsyncMock(return_value={'fields': {'f': {'keyword': {'aggregatable': True}},
+                                                       '@timestamp': {'date': {'aggregatable': True}}}})
     async with Client(mcp) as client:
         result = await client.call_tool('prod_top_values', {'index': 'i', 'field': 'f', 'time_range': DAY})
+        with pytest.raises(ToolError, match='Use prod_describe_fields'):
+            await client.call_tool('prod_top_values', {'index': 'i', 'field': 'missing', 'time_range': DAY})
     assert 'Use prod_describe_fields' in result.structured_content['hint']
 
 

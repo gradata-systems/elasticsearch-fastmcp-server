@@ -6,8 +6,9 @@ from fastmcp import Context
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from security.esql import aggregates, source_indices
+from security.esql import aggregates, quoted_field_names, source_indices
 from security.policy import matches_index_expression
+from tools.checks import check_fields
 from tools.query import Filter, TimeRange, bool_query, build_query, field_value, fit_to_budget
 from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
 
@@ -247,6 +248,7 @@ async def search_events(
     To count or rank values (e.g. top source IPs), use top_values instead.
     """
     es = gateway_from(ctx)
+    await check_fields(es, index, filters=filters, query=query, timestamp_field=timestamp_field)
     result = await run_search(
         es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
         fields, size, sort, timestamp_field)
@@ -274,6 +276,7 @@ async def top_values(
     To list every value rather than the most frequent, use distinct_values.
     """
     es = gateway_from(ctx)
+    await check_fields(es, index, filters=filters, query=query, aggregated=[field], timestamp_field=timestamp_field)
     result = await run_top_values(
         es, index, build_query(time_range, timestamp_field, es.settings.max_aggregation_range_days, filters, query),
         field, size, include_fields)
@@ -302,6 +305,7 @@ async def distinct_values(
     are not left out, so use it for complete answers to questions like "which X occurred in period Y?".
     """
     es = gateway_from(ctx)
+    await check_fields(es, index, filters=filters, query=query, aggregated=[field], timestamp_field=timestamp_field)
     result = await run_distinct_values(
         es, index, build_query(time_range, timestamp_field, es.settings.max_aggregation_range_days, filters, query),
         field, size, timestamp_field, order, include_fields)
@@ -376,6 +380,7 @@ async def compare_periods(
     """
     es = gateway_from(ctx)
     group_by = group_by or _event_type_group(ctx, index)
+    await check_fields(es, index, filters=filters, query=query, aggregated=group_by, timestamp_field=timestamp_field)
     max_days = es.settings.max_aggregation_range_days
     before_start, before_end = before.bounds(max_days)
     after_start, after_end = after.bounds(max_days)
@@ -456,7 +461,12 @@ async def esql_query(
     computed columns, joins between conditions, time bucketing (BUCKET) and so on.
     The time range is applied automatically; don't repeat it in the query. Always end with LIMIT,
     and prefer STATS over returning raw rows; queries with STATS may also cover a longer time range.
+    Double quotes make a string, not a field name: write fields bare, or in backticks if they contain
+    special characters, e.g. WHERE `user-agent` == "curl".
     """
+    if quoted := quoted_field_names(query):
+        raise ToolError(f"{', '.join(quoted)} is a string, not a field name. Write field names bare, "
+                        f"or in backticks if they contain special characters, e.g. WHERE `field.name` == \"value\".")
     es = gateway_from(ctx)
     max_days = es.settings.max_aggregation_range_days if aggregates(query) else es.settings.max_time_range_days
     body = await es.esql(query, time_range.to_query(timestamp_field, max_days))
