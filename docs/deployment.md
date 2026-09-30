@@ -105,7 +105,24 @@ service:
 ```
 
 Leave the [audit log](audit-log.md) on stdout in Kubernetes and collect it with your log shipper.
-The pod's filesystem doesn't survive restarts.
+To write it to a file instead, set `audit.file.enabled`. The file is on an `emptyDir` and lost with
+the pod, unless you also set `audit.file.persistence.enabled`. The chart then deploys a StatefulSet
+rather than a Deployment, giving each replica (`es-mcp-0`, `es-mcp-1`, ...) its own
+PersistentVolumeClaim, so each keeps its file across restarts and rollouts:
+
+```yaml
+audit:
+  file:
+    enabled: true
+    persistence:
+      enabled: true
+      size: 5Gi
+      storageClassName: standard
+```
+
+Turning persistence on or off for an existing release replaces the workload, restarting every
+pod. The claims outlive the release; delete them yourself when the audit files are no longer
+needed.
 
 Rendering fails with a clear message if a required setting is missing: the URLs, the
 impersonator secret or password, or a TLS source. `charts/es-mcp/values.yaml` documents every

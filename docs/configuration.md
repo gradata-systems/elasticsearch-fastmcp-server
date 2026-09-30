@@ -83,7 +83,7 @@ can't see.
 |---|---|---|---|
 | `ES_MCP_ACCESS_POLICY_FILE` | `accessPolicy` | `access_policy.yaml` | Exposed indices and impersonable users (see [Access control](access-control.md)). |
 | `ES_MCP_PACKS_DIR` | `packs`, `packsConfigMaps` | none | Directory of source pack YAML files (see [Source packs](source-packs.md)). Unset, there are no packs. The server refuses to start if it's set to a directory that doesn't exist. |
-| `ES_MCP_AUDIT_LOG_FILE` | `extraEnv` | stdout | Where audit events go, as JSON lines (see [Audit log](audit-log.md)). |
+| `ES_MCP_AUDIT_LOG_FILE` | `audit.file.enabled`, `audit.file.path` | stdout | Where audit events go, as JSON lines (see [Audit log](audit-log.md)). The chart mounts a volume at the file's directory, since the container's filesystem is read-only: an `emptyDir`, or with `audit.file.persistence.enabled` a PersistentVolumeClaim per replica, which makes the chart deploy a StatefulSet. |
 
 ### HTTP listener
 

@@ -1,7 +1,10 @@
-# Rendered in CI: TLS terminated in front of the server.
+# Rendered in CI: TLS terminated in front of the server, audit log written to a file.
 publicBaseUrl: https://es-mcp.example.com
 elasticsearch:
   url: https://es.example.svc:9200
   impersonator: {existingSecret: es-mcp-impersonator}
 oidc: {issuer: https://idp.example.com}
 tls: {enabled: false}
+audit:
+  file:
+    enabled: true

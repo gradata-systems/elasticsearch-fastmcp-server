@@ -1,5 +1,5 @@
 # Rendered in CI: cert-manager certificate, overridden policy, packs from values and existing
-# ConfigMaps, several replicas.
+# ConfigMaps, several replicas, audit log on a claim per replica (StatefulSet).
 publicBaseUrl: https://es-mcp.example.com
 elasticsearch:
   url: https://es.example.svc:9200
@@ -16,3 +16,8 @@ accessPolicy:
 packs:
   mini.yaml: {name: mini, title: Mini, description: CI pack, index: "a-*,-a-debug-*"}
 packsConfigMaps: [siem-packs, team-packs]
+# Audit log on a claim per replica, which makes the workload a StatefulSet.
+audit:
+  file:
+    enabled: true
+    persistence: {enabled: true, size: 5Gi}

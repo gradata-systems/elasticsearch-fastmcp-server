@@ -1,5 +1,17 @@
 {{- $es := .Values.elasticsearch }}
 {{- $oidc := .Values.oidc }}
+{{- $audit := .Values.audit.file }}
+{{- if and $audit.persistence.enabled (not $audit.enabled) }}
+{{- fail "audit.file.persistence.enabled requires audit.file.enabled" }}
+{{- end }}
+{{- /* A persistent audit log needs a claim per replica, which only a StatefulSet provides. */}}
+{{- $statefulSet := $audit.persistence.enabled }}
+{{- if and $audit.enabled (not (hasPrefix "/" $audit.path)) }}
+{{- fail "audit.file.path must be an absolute path" }}
+{{- end }}
+{{- if and $audit.enabled (eq (dir $audit.path) "/") }}
+{{- fail "audit.file.path must be in a directory other than /" }}
+{{- end }}
 {{- if and $es.ca.secretName $es.ca.configMapName }}
 {{- fail "set only one of elasticsearch.ca.secretName and elasticsearch.ca.configMapName" }}
 {{- end }}
@@ -11,7 +23,7 @@
 {{- end }}
 {{- $portName := include "es-mcp.portName" . }}
 apiVersion: apps/v1
-kind: Deployment
+kind: {{ ternary "StatefulSet" "Deployment" $statefulSet }}
 metadata:
   name: {{ include "es-mcp.fullname" . }}
   labels:
@@ -22,6 +34,11 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if $statefulSet }}
+  serviceName: {{ include "es-mcp.fullname" . }}
+  # Replicas are independent; start and stop them together rather than one by one.
+  podManagementPolicy: Parallel
+  {{- end }}
   selector:
     matchLabels:
       {{- include "es-mcp.selectorLabels" . | nindent 6 }}
@@ -133,6 +150,10 @@ spec:
             - name: ES_MCP_PACKS_DIR
               value: /etc/es-mcp/packs
             {{- end }}
+            {{- if $audit.enabled }}
+            - name: ES_MCP_AUDIT_LOG_FILE
+              value: {{ $audit.path | quote }}
+            {{- end }}
             {{- if .Values.tls.enabled }}
             - name: ES_MCP_TLS_CERTFILE
               value: /etc/es-mcp/tls/tls.crt
@@ -191,6 +212,10 @@ spec:
               mountPath: /etc/es-mcp/packs
               readOnly: true
             {{- end }}
+            {{- if $audit.enabled }}
+            - name: audit
+              mountPath: {{ dir $audit.path }}
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -244,6 +269,10 @@ spec:
                   name: {{ . }}
               {{- end }}
         {{- end }}
+        {{- if and $audit.enabled (not $statefulSet) }}
+        - name: audit
+          emptyDir: {}
+        {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -263,3 +292,19 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+  {{- if $statefulSet }}
+  volumeClaimTemplates:
+    - metadata:
+        name: audit
+        labels:
+          {{- include "es-mcp.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml $audit.persistence.accessModes | nindent 10 }}
+        {{- with $audit.persistence.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $audit.persistence.size }}
+  {{- end }}
