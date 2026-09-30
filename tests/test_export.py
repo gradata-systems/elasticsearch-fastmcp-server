@@ -89,6 +89,16 @@ def test_spec_round_trips_and_rejects_tampered_links():
             ExportSpec.decode(bad)
 
 
+def test_csv_keeps_formula_like_text_as_text():
+    spec = ExportSpec(index='i', time_range=TimeRange(**TR), fields=['a', 'n'])
+    sources = [{'a': '=HYPERLINK("http://x")', 'n': -5}, {'a': '@SUM(1)', 'n': 1.5},
+               {'a': '-cmd /c calc', 'n': None}, {'a': 'plain', 'n': 0}]
+    assert render(spec, sources).splitlines() == [
+        'a,n', '"\'=HYPERLINK(""http://x"")",-5', "'@SUM(1),1.5", "'-cmd /c calc,", 'plain,0']
+    # NDJSON isn't opened as a spreadsheet, so values are left exactly as they are.
+    assert json.loads(render(ExportSpec(index='i', time_range=TimeRange(**TR)), sources[:1]))['a'][0] == '='
+
+
 def test_render_uses_csv_only_for_exactly_named_fields():
     sources = [{'user': {'name': 'a'}, 'n': 1}]
     wildcard = ExportSpec(index='i', time_range=TimeRange(**TR), fields=['user.*'])

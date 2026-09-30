@@ -579,7 +579,7 @@ events passing through the model. The tool returns only the count and the link.
 |---|---|---|
 | `index`, `time_range` | required | As for `search_events`, including the 90-day limit. An open-ended period is fixed at the time of the call, so the link always returns the same events. |
 | `filters`, `query` | none | |
-| `fields` | whole events | Named exactly, the export is CSV with one column per field. Left out, or with wildcards, it is NDJSON: one flattened event per line. |
+| `fields` | whole events | Named exactly, the export is CSV with one column per field. Left out, or with wildcards, it is NDJSON: one flattened event per line. In CSV, text starting with `=`, `+`, `-`, `@`, a tab or a carriage return gets a leading `'`, so a spreadsheet shows it as text instead of running it as a formula. Numbers and NDJSON values are left as they are. |
 | `sort` | `desc` | Which events are kept when there are more than the limit: the most recent (`desc`) or the earliest (`asc`). |
 | `timestamp_field` | `@timestamp` | |
 

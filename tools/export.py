@@ -127,11 +127,18 @@ async def export_events(
                       structured_content=result)
 
 
+# Characters that make a spreadsheet read a cell as a formula. Log data is often attacker-controlled
+# (user agents, command lines, URLs), so such text is prefixed with ' to keep it text when opened.
+_FORMULA_START = ('=', '+', '-', '@', '\t', '\r')
+
+
 def _cell(value: Any) -> str:
     if value is None:
         return ''
     if isinstance(value, (list, dict)):
         return json.dumps(value, default=str)
+    if isinstance(value, str) and value.startswith(_FORMULA_START):
+        return "'" + value
     return str(value)
 
 
