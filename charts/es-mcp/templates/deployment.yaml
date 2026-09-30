@@ -127,7 +127,7 @@ spec:
             - name: ES_MCP_ACCESS_POLICY_FILE
               value: /etc/es-mcp/config/access_policy.yaml
             {{- end }}
-            {{- if .Values.packs }}
+            {{- if or .Values.packs .Values.packsConfigMaps }}
             - name: ES_MCP_PACKS_DIR
               value: /etc/es-mcp/packs
             {{- end }}
@@ -184,7 +184,7 @@ spec:
               mountPath: /etc/es-mcp/config
               readOnly: true
             {{- end }}
-            {{- if .Values.packs }}
+            {{- if or .Values.packs .Values.packsConfigMaps }}
             - name: packs
               mountPath: /etc/es-mcp/packs
               readOnly: true
@@ -226,10 +226,21 @@ spec:
               - key: access_policy.yaml
                 path: access_policy.yaml
         {{- end }}
-        {{- if .Values.packs }}
+        {{- if or .Values.packs .Values.packsConfigMaps }}
         - name: packs
-          configMap:
-            name: {{ include "es-mcp.fullname" . }}-packs
+          projected:
+            sources:
+              {{- if .Values.packs }}
+              - configMap:
+                  name: {{ include "es-mcp.fullname" . }}-packs
+              {{- end }}
+              {{- range .Values.packsConfigMaps }}
+              {{- if not (kindIs "string" .) }}
+              {{- fail "packsConfigMaps entries must be ConfigMap names" }}
+              {{- end }}
+              - configMap:
+                  name: {{ . }}
+              {{- end }}
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

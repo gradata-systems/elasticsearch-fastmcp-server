@@ -174,3 +174,9 @@ async def test_tool_schemas_show_the_servers_result_size_limit():
         **tools['distinct_values'].input_schema['properties']['size'], 'maximum': 50, 'default': 50}
     assert tools['search_events'].input_schema['properties']['size']['maximum'] == 50
     assert tools['windows_logon_users'].input_schema['properties']['size']['maximum'] == 50
+
+
+def test_no_source_packs_unless_configured():
+    required = dict(es_url='https://es:9200', es_impersonator_username='u', es_impersonator_password='p',
+                    oidc_issuer='https://idp/realms/r', oidc_audience='a', public_base_url='https://m')
+    assert Settings(**required, _env_file=None).packs_dir is None

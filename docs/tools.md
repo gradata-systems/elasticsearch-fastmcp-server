@@ -504,6 +504,9 @@ other tools when they fit, because they check arguments and explain their result
 
 ## Pack tools
 
+The packs below are the examples in the repository's `packs/`. A deployment offers the tools of
+whichever packs it's given, and none by default.
+
 Each pack tool is a fixed query over one data source. Its index, filters and returned fields come
 from the pack, and it takes a few named arguments. Every pack tool also takes:
 

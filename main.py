@@ -20,7 +20,7 @@ settings = Settings()
 policy = AccessPolicy.load(settings.access_policy_file)
 configure_audit_log(settings.audit_log_file, settings.cluster_name)
 exposed = Caller('', '', frozenset(policy.exposed_indices))
-packs = exposed_packs(load_packs(settings.packs_dir), exposed.may_read)
+packs = exposed_packs(load_packs(settings.packs_dir), exposed.may_read) if settings.packs_dir else []
 
 
 @asynccontextmanager

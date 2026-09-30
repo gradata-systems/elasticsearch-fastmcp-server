@@ -152,7 +152,7 @@ Show the YAML in one block and ask the user to review it. Revise it until they a
 Give the user the final YAML in one block, as `<name>.yaml`, and stop there. Don't write it
 anywhere yourself. Explain that to use it, they (or whoever manages the deployment) would:
 1. add it to the deployment's pack collection: the packs directory the server reads
-   (`ES_MCP_PACKS_DIR`), or the Helm chart's `packs` value,
+   (`ES_MCP_PACKS_DIR`), or the Helm chart's `packs` value or one of its `packsConfigMaps`,
 2. make sure `exposed_indices` in `access_policy.yaml` covers the pack's `index`, or the pack is
    skipped at startup,
 3. optionally validate it again, with `uv run pytest` in a checkout that includes it, which loads

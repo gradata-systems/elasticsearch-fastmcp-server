@@ -1,6 +1,6 @@
 # Source packs
 
-A source pack is a YAML file in `packs/` (`ES_MCP_PACKS_DIR`) that describes one data source and
+A source pack is a YAML file in the packs directory (`ES_MCP_PACKS_DIR`) that describes one data source and
 declares curated tools for it. **Adding a data source means adding a YAML file, not writing
 code.** Everything specific to a source belongs in its pack: index names, field names, event
 codes and retention. The server code stays independent of any schema.
@@ -12,9 +12,10 @@ A pack gives agents two things:
 - **Shortcuts.** Each tool in the pack is a fixed query, a search, top-values or distinct-values
   query with built-in filters, exposed as its own MCP tool with a few named arguments.
 
-Included packs: `windows` (Windows security events), `fortios` (FortiGate firewall logs) and
-`ingress_nginx` (ingress-nginx access logs). The [tool guide](tools.md#pack-tools) describes
-their tools.
+The server loads no packs unless `ES_MCP_PACKS_DIR` is set. The repository's `packs/` holds
+examples, for illustration only and not included in the container image: `windows` (Windows
+security events), `fortios` (FortiGate firewall logs) and `ingress_nginx` (ingress-nginx access
+logs). The [tool guide](tools.md#pack-tools) describes their tools.
 
 ## Pack fields
 

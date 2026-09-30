@@ -222,3 +222,8 @@ async def test_pack_search_tools_keep_the_event_search_limit(es, windows):
 def test_search_tool_size_is_capped():
     with pytest.raises(ValidationError, match='at most 100'):
         ToolSpec(name='t', kind='search', description='d', size=200)
+
+
+def test_missing_pack_directory_is_an_error(tmp_path):
+    with pytest.raises(ValueError, match='does not exist'):
+        load_packs(tmp_path / 'nope')

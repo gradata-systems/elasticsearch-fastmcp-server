@@ -81,7 +81,7 @@ can't see.
 | Variable | Chart value | Default | Meaning |
 |---|---|---|---|
 | `ES_MCP_ACCESS_POLICY_FILE` | `accessPolicy` | `access_policy.yaml` | Exposed indices and impersonable users (see [Access control](access-control.md)). |
-| `ES_MCP_PACKS_DIR` | `packs` | `packs` | Directory of source pack YAML files (see [Source packs](source-packs.md)). |
+| `ES_MCP_PACKS_DIR` | `packs`, `packsConfigMaps` | none | Directory of source pack YAML files (see [Source packs](source-packs.md)). Unset, there are no packs. The server refuses to start if it's set to a directory that doesn't exist. |
 | `ES_MCP_AUDIT_LOG_FILE` | `extraEnv` | stdout | Where audit events go, as JSON lines (see [Audit log](audit-log.md)). |
 
 ### HTTP listener

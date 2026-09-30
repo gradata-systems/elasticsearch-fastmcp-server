@@ -77,9 +77,15 @@ limits:
 #   impersonable_users: ["*.*", "service-account-*"]
 accessPolicy: {}
 
-# Replaces the image's built-in source packs when set. Keys are file names; values are the pack
-# as YAML text or as a map, e.g. --set-file 'packs.windows\.yaml=packs/windows.yaml'.
+# Source packs, from either or both of these; file names must be unique across them. With neither,
+# the server has no packs and offers only the generic tools. The image includes no packs.
+#
+# Packs defined here. Keys are file names; values are the pack as YAML text or as a map, e.g.
+# --set-file 'packs.windows\.yaml=packs/windows.yaml'.
 packs: {}
+# Existing ConfigMaps in the release namespace, each holding packs as <name>.yaml keys, e.g.
+# [siem-packs, team-packs]. Pods don't restart when these change; restart them to load changes.
+packsConfigMaps: []
 
 # The server terminates TLS itself, so a LoadBalancer service can pass traffic straight through.
 tls:

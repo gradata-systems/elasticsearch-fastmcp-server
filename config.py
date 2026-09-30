@@ -39,8 +39,9 @@ class Settings(BaseSettings):
 
     # Exposed indices and impersonable usernames
     access_policy_file: Path = Path('access_policy.yaml')
-    # Source packs (*.yaml) describing data sources and their curated tools
-    packs_dir: Path = Path('packs')
+    # Source packs (*.yaml) describing data sources and their curated tools. Unset, there are none and
+    # only the generic tools are offered; the repository's packs/ are examples, not defaults.
+    packs_dir: Path | None = None
 
     # Audit trail as JSON lines; stdout when unset (suits Kubernetes log shipping).
     audit_log_file: Path | None = None

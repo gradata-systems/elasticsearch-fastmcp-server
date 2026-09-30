@@ -25,8 +25,8 @@ TLS, the server logs a warning at startup.
 
 CI publishes `ghcr.io/gradata-systems/elasticsearch-fastmcp-server`, tagged by branch (`master`),
 commit (`sha-<short>`) and release version (`0.3.1`, `0.3`). The image runs as a non-root user
-(UID 10001), works with a read-only root filesystem, and bakes in `access_policy.yaml` and
-`packs/` as defaults.
+(UID 10001), works with a read-only root filesystem, and bakes in `access_policy.yaml` as a
+default. It includes no source packs, so it offers only the generic tools until you give it some.
 
 ```
 docker run -d --name es-mcp --read-only --tmpfs /tmp --cap-drop ALL -p 8443:8000 \
@@ -38,8 +38,8 @@ docker run -d --name es-mcp --read-only --tmpfs /tmp --cap-drop ALL -p 8443:8000
 curl --cacert tls/tls.crt https://localhost:8443/healthz   # "ok"
 ```
 
-To use your own policy or packs, mount them and point `ES_MCP_ACCESS_POLICY_FILE` or
-`ES_MCP_PACKS_DIR` at them. To build the image yourself:
+To use your own policy, or to add source packs, mount them and point `ES_MCP_ACCESS_POLICY_FILE`
+or `ES_MCP_PACKS_DIR` at them. To build the image yourself:
 
 ```
 docker build -t <registry>/es-mcp:<tag> .
@@ -136,7 +136,9 @@ accessPolicy:
   impersonable_users: ["*.*", "service-account-*"]
 ```
 
-`packs` replaces the built-in packs, so include every pack you want to keep:
+Packs come from `packs`, from existing ConfigMaps listed in `packsConfigMaps`, or both. With
+neither, the server has no packs. The packs in the repository's `packs/` are examples and aren't
+in the image; copy any you want to start from:
 
 ```
 helm upgrade es-mcp charts/es-mcp -n es-mcp -f es-mcp-values.yaml \
@@ -144,7 +146,31 @@ helm upgrade es-mcp charts/es-mcp -n es-mcp -f es-mcp-values.yaml \
   --set-file 'packs.fortios\.yaml=packs/fortios.yaml'
 ```
 
-Pods restart automatically when the policy, packs or a chart-managed password change.
+`packsConfigMaps` suits packs managed apart from the release, for example by different teams or
+by GitOps. Each ConfigMap is in the release's namespace and holds one key per pack, named
+`<name>.yaml`:
+
+```
+kubectl -n es-mcp create configmap siem-packs --from-file=packs/windows.yaml --from-file=packs/fortios.yaml
+kubectl -n es-mcp create configmap team-packs --from-file=app_audit.yaml
+```
+
+```yaml
+packsConfigMaps: [siem-packs, team-packs]
+```
+
+All the packs are mounted together in one directory, so file names must be unique across
+`packs` and every listed ConfigMap; a duplicate stops the pods from starting. Keys that don't end
+in `.yaml` are ignored. The server rejects an invalid pack, or a tool name used by two packs, at
+startup.
+
+Pods restart automatically when the policy, `packs` or a chart-managed password change. They
+don't notice changes to the ConfigMaps in `packsConfigMaps`, because the server reads packs only
+at startup. Restart them after changing one:
+
+```
+kubectl -n es-mcp rollout restart deployment/es-mcp
+```
 
 ### Things to know
 

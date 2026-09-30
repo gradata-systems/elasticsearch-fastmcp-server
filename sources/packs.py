@@ -158,6 +158,8 @@ class SourcePack(BaseModel):
 
 
 def load_packs(directory: Path) -> list[SourcePack]:
+    if not directory.is_dir():
+        raise ValueError(f"source pack directory '{directory}' does not exist")
     packs = [SourcePack.load(path) for path in sorted(directory.glob('*.yaml'))]
     seen: dict[str, str] = {}
     for pack in packs:

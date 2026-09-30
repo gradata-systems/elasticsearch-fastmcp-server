@@ -29,7 +29,8 @@ audit trail.
 | `esql_query` | Read-only ES\|QL |
 | `validate_source_pack` | Check a pack written with `create_source_pack`, without loading it |
 
-The included packs add tools for Windows security events, FortiGate firewall logs and
+Source packs describe your data sources and add curated tools for them. None are loaded by
+default; `packs/` holds examples for Windows security events, FortiGate firewall logs and
 ingress-nginx access logs. See the [tool guide](docs/tools.md) for arguments and examples.
 
 The `create_source_pack` prompt has an agent write a pack for a new data source with you,
