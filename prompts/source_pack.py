@@ -11,7 +11,7 @@ from sources.packs import SourcePack
 
 # Tools the instructions refer to, filled in with this deployment's (possibly prefixed) names.
 _TOOLS_MENTIONED = ['list_data_sources', 'describe_fields', 'top_values', 'search_events', 'compare_periods',
-                    'esql_query']
+                    'esql_query', 'validate_source_pack']
 
 # A Template rather than str.format, because the text is full of literal JSON braces.
 _INSTRUCTIONS = Template("""\
@@ -20,8 +20,9 @@ describes one data source and declares curated tools for it. Work with the user 
 questions and wait for their answers rather than guessing, and keep each message short enough to
 answer quickly.
 
-The result is YAML text that you give back to the user. It isn't added to this server: you can't
-install, save or load a pack here, and shouldn't try. The user decides whether and how to add it
+The result is YAML text that you give back to the user. Write it in YAML, never JSON, even though
+the mapping and the schema below are JSON. It isn't added to this server: you can't install, save
+or load a pack here, and shouldn't try. The user decides whether and how to add it
 to the pack collection their deployment uses.
 
 A pack is read by other agents, not people. Its description, key field explanations and tool
@@ -95,7 +96,8 @@ best guess so the user can simply confirm or correct it. Ask in particular when:
 - several fields could name the kind of event. Settle which one is `event_type_field`, which
   `$compare_periods` groups by by default.
 
-Also agree `default_fields`: the fields a search returns when a tool doesn't choose its own.
+`key_fields` is a map from each field name to its explanation, not a list. Also agree
+`default_fields`: the fields a search returns when a tool doesn't choose its own.
 They should be enough to read an event at a glance.
 
 ## Step 5: Tools from the user's use cases
@@ -127,7 +129,10 @@ adjust them before you write the YAML.
 
 ## Step 6: Write and check the YAML
 
-Write the complete pack. Before showing it, check it against the schema below and these rules:
+Write the complete pack in YAML, in the format shown under "Pack format" below. Then call
+`$validate_source_pack` with it, fix every problem it reports, and call it again until it reports
+the pack valid. If it couldn't read the pack's index, check every field against the mapping
+yourself. Don't show the user a pack that hasn't passed. The rules it checks:
 - Tool names are lower_snake_case, at most 64 characters, and unique. They shouldn't clash with
   the existing tools listed below.
 - Parameter names are lower_snake_case and aren't `time_range` or `size`.
@@ -150,13 +155,21 @@ anywhere yourself. Explain that to use it, they (or whoever manages the deployme
    (`ES_MCP_PACKS_DIR`), or the Helm chart's `packs` value,
 2. make sure `exposed_indices` in `access_policy.yaml` covers the pack's `index`, or the pack is
    skipped at startup,
-3. validate it, for example with `uv run pytest` in a checkout that includes it, which loads every
-   pack and rejects invalid ones, and
+3. optionally validate it again, with `uv run pytest` in a checkout that includes it, which loads
+   every pack and rejects invalid ones, and
 4. redeploy or restart the server, then check that `$list_data_sources` shows the pack.
+
+## Pack format
+
+Every key a pack may have, with placeholder values. Keys marked optional may be left out.
+
+```yaml
+$skeleton```
 
 ## Pack schema
 
-JSON schema of a pack, generated from the server's own validation:
+For reference, the JSON schema of a pack, generated from the server's own validation. The pack
+itself is written in YAML, in the format above.
 
 ```json
 $schema
@@ -168,6 +181,53 @@ $index_section```json
 $mapping
 ```
 """)
+
+# Placeholder names only: the pack's real fields come from the mapping.
+SKELETON = """name: app_audit                    # lower_snake_case
+title: Application audit log
+description: >
+  What the data is, what one event represents, what it is good for, the retention tiers, and
+  anything surprising.
+index: app-audit-*,app-audit-archive  # every index or data stream holding the data, all tiers
+retention_days: 30                 # optional: how far back every event is kept
+event_type_field: action           # optional: the field naming the kind of each event
+timestamp_field: '@timestamp'      # optional: the default
+key_fields:                        # a map from field name to explanation, not a list
+  account: Account that performed the action, lower case, e.g. 'jsmith'
+  action: What was done, e.g. 'login' or 'delete'
+  outcome: "'success' or 'failure'"
+default_fields: ['@timestamp', account, action, outcome]
+tools:
+  - name: app_audit_account_events  # lower_snake_case, unique on the server
+    kind: search                    # search, top_values or distinct_values
+    description: Actions by one account, most recent first, optionally only failures.
+    params:                         # optional: a map from parameter name to its definition
+      account:
+        description: Account name, e.g. 'jsmith'
+        fields: [account]           # fields the value is matched against; any may match
+        type: string                # optional: string (default) or integer
+        match: eq                   # optional: eq (default) or prefix
+        required: true              # optional: true (default) or false
+    filters:                        # optional: fixed conditions, as in the generic tools
+      - {field: outcome, op: eq, value: failure}
+    query: 'action:(login OR logout)'  # optional: fixed Lucene query
+    fields: ['@timestamp', action, outcome]  # optional, search only: defaults to default_fields
+    sort: desc                      # optional, search only: desc (default) or asc
+    size: 50                        # optional: default number of results
+  - name: app_audit_top_accounts
+    kind: top_values
+    description: Accounts with the most failed actions.
+    field: account                  # top_values and distinct_values: the field to rank or list
+    include_fields: [action]        # optional: shown from one example event per value
+    filters:
+      - {field: outcome, op: eq, value: failure}
+    size: 20
+  - name: app_audit_actions
+    kind: distinct_values
+    description: Every action performed, with when each was first and last seen.
+    field: action
+    order: last_seen                # optional, distinct_values only: last_seen, count or value
+"""
 
 _NO_USE_CASES = """\
 Ask the user what questions they want agents to answer with this data, for example "which
@@ -217,6 +277,7 @@ def create_source_pack(
                               if existing else '')
     return _INSTRUCTIONS.substitute(
         use_cases_section=use_cases_section,
+        skeleton=SKELETON,
         schema=json.dumps(SourcePack.model_json_schema(), indent=2),
         example_section=_example(packs),
         existing_tools_section=existing_tools_section,

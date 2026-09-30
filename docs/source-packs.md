@@ -172,11 +172,28 @@ The agent then works through the pack with you:
    comes with its best guess, so you can confirm or correct it.
 5. It turns each use case into a `search`, `top_values` or `distinct_values` tool. It shows them
    as a table for you to adjust, and points out use cases that a generic tool already covers.
-6. It writes the YAML, checks it against the pack schema and the rules above, and revises it
-   with you.
+6. It writes the YAML and checks it with the `validate_source_pack` tool, fixing every problem
+   before showing it to you, then revises it with you.
 
-The prompt gives the agent the pack schema generated from the server's own validation, one of
-the loaded packs as an example, and the tool names already in use.
+The prompt gives the agent a YAML outline of every pack key, the pack schema generated from the
+server's own validation, one of the loaded packs as an example, and the tool names already in use.
+
+### validate_source_pack
+
+The tool the agent checks a pack with. It takes the pack as YAML text and returns
+`{"valid": ..., "problems": [...]}`, with each problem saying where it is and how to fix it:
+
+- JSON instead of YAML, and YAML that doesn't parse;
+- anything the server's own validation rejects, such as an unknown key (with the likely intended
+  one, e.g. `fields: unknown key; did you mean key_fields or default_fields?`), a list where a map
+  belongs, or a missing `field`;
+- tool names already used on this server, or used twice in the pack;
+- lowercase `and`/`or`/`not` and `==`-style comparisons in a tool's `query`;
+- if the caller can read the pack's `index` through this server, fields that don't exist, are
+  objects, are `text` but matched exactly, can't be grouped by, or (for `timestamp_field`) aren't
+  dates. If the index can't be read, a note says the fields weren't checked.
+
+Like the prompt, it has no side effects: it doesn't save, install or load the pack.
 
 **The result is only handed back.** The agent returns the pack as YAML text. Nothing is saved,
 installed or loaded on the server, and the server has no way to do so. Whether the pack is used is

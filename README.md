@@ -27,6 +27,7 @@ audit trail.
 | `distinct_values` | Every value of a field, with counts and first/last seen |
 | `compare_periods` | What stopped, dropped, appeared or rose between two periods |
 | `esql_query` | Read-only ES\|QL |
+| `validate_source_pack` | Check a pack written with `create_source_pack`, without loading it |
 
 The included packs add tools for Windows security events, FortiGate firewall logs and
 ingress-nginx access logs. See the [tool guide](docs/tools.md) for arguments and examples.

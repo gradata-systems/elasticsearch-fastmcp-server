@@ -14,7 +14,7 @@ from fastmcp.tools import Tool
 from config import Settings
 from prompts import source_pack
 from sources.packs import SourcePack, SourceTool
-from tools import generic
+from tools import generic, pack_validation
 
 # Longest tool name many model APIs accept (^[a-zA-Z0-9_-]{1,64}$).
 MAX_NAME_LENGTH = 64
@@ -82,8 +82,9 @@ def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
 
 def register(mcp: FastMCP, settings: Settings, packs: list[SourcePack]) -> None:
     """Add the generic tools, the packs' tools and the prompts to `mcp`, prefixed as configured."""
-    names = [fn.__name__ for fn in generic.ALL_TOOLS] + [spec.name for pack in packs for spec in pack.tools]
-    for fn in generic.ALL_TOOLS:
+    functions = generic.ALL_TOOLS + pack_validation.ALL_TOOLS
+    names = [fn.__name__ for fn in functions] + [spec.name for pack in packs for spec in pack.tools]
+    for fn in functions:
         mcp.add_tool(qualified(Tool.from_function(fn), names, settings))
     for pack in packs:
         for spec in pack.tools:

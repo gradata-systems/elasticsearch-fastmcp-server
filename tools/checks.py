@@ -34,18 +34,25 @@ def _lucene_syntax(query: str) -> str:
     return _LUCENE_VALUES.sub(' ', _ESCAPED.sub('x', query))
 
 
-def check_lucene(query: str | None) -> None:
-    """Reject Lucene queries that parse but don't mean what they appear to."""
+def lucene_problems(query: str | None) -> list[str]:
+    """Ways a Lucene query parses but doesn't mean what it appears to."""
     if not query:
-        return
+        return []
     syntax = _lucene_syntax(query)
+    problems = []
     if operator := _LOWERCASE_OPERATOR.search(syntax):
         word = operator.group(1)
-        raise ToolError(f"Lucene searches for a lowercase '{word}' as a word; write {word.upper()} for the "
+        problems.append(f"Lucene searches for a lowercase '{word}' as a word; write {word.upper()} for the "
                         f"operator, or quote it to search for the word.")
     if comparison := _COMPARISON.search(syntax):
-        raise ToolError(f"Lucene has no '{comparison.group(1)}' operator; write field:value, "
+        problems.append(f"Lucene has no '{comparison.group(1)}' operator; write field:value, "
                         f"NOT field:value or a range such as field:>=10.")
+    return problems
+
+
+def check_lucene(query: str | None) -> None:
+    if problems := lucene_problems(query):
+        raise ToolError(' '.join(problems))
 
 
 def lucene_fields(query: str | None) -> set[str]:
@@ -67,8 +74,7 @@ def _instead(name: str, alternatives: list[str], otherwise: str) -> str:
     return f"use {' or '.join(repr(a) for a in alternatives)}" if alternatives else otherwise
 
 
-async def _suggestions(es: ElasticsearchGateway, index: str, name: str) -> list[str]:
-    known = list((await es.field_caps(index, ['*'])).get('fields', {}))
+def _suggestions(name: str, known: list[str]) -> list[str]:
     leaf = name.rsplit('.', 1)[-1].lower()
     ranked = ([f for f in known if f.lower() == name.lower()]
               + difflib.get_close_matches(name, known, n=3, cutoff=0.7)
@@ -76,42 +82,61 @@ async def _suggestions(es: ElasticsearchGateway, index: str, name: str) -> list[
     return list(dict.fromkeys(ranked))[:5]
 
 
-async def check_fields(es: ElasticsearchGateway, index: str, *, filters: Iterable[Filter] = (),
-                       query: str | None = None, aggregated: Iterable[str] = (),
-                       timestamp_field: str | None = None) -> None:
-    """Check that the fields a tool call names exist in `index` and suit how they are used.
+async def field_problems(es: ElasticsearchGateway, index: str, *, exact: Iterable[str] = (),
+                         aggregated: Iterable[str] = (), timestamp_field: str | None = None,
+                         other: Iterable[str] = ()) -> list[str]:
+    """Problems with the fields a query or pack names, checked against `index`'s mapping.
 
-    `aggregated` fields are grouped by, so must be aggregatable; exact-match filters need a field that
-    isn't analysed text; the timestamp field must be a date.
+    `exact` fields are matched on whole values, so mustn't be analysed text; `aggregated` fields are
+    grouped by, so must be aggregatable; the timestamp field must be a date. Wildcards and metadata
+    fields aren't checked.
     """
-    check_lucene(query)
-    filters, aggregated = list(filters), set(aggregated)
-    exact = {f.field for f in filters if f.op in _EXACT_OPS}
-    named = {f.field for f in filters} | lucene_fields(query) | aggregated | {timestamp_field or ''}
+    exact, aggregated = set(exact), set(aggregated)
+    named = exact | aggregated | set(other) | {timestamp_field or ''}
     named = {n for n in named if n and not n.startswith('_') and not any(c in n for c in '*?')}
     if not named:
-        return
+        return []
     body = await es.field_caps(index, sorted({pattern for n in named for pattern in (n, f'{n}.*')}))
+    if 'indices' in body and not body['indices']:
+        raise ToolError(f"No index matches '{index}'")
     mapped = body.get('fields', {})
 
+    problems, known = [], None
     for name in sorted(named):
         if name not in mapped:
-            hint = f"Use {es.settings.tool_prefix}describe_fields to list the fields."
-            if similar := await _suggestions(es, index, name):
-                hint = f"Did you mean {', '.join(similar)}? " + hint
-            raise ToolError(f"No field '{name}' in '{index}'. {hint}")
+            if known is None:
+                known = list((await es.field_caps(index, ['*'])).get('fields', {}))
+            similar = _suggestions(name, known)
+            problems.append(f"No field '{name}' in '{index}'."
+                            + (f" Did you mean {', '.join(similar)}?" if similar else ''))
+            continue
         types = set(mapped[name]) - {'unmapped'}
         if types <= _OBJECT_TYPES:
             children = _subfields(name, mapped)
-            raise ToolError(f"'{name}' is an object, not a field; name one of its fields"
+            problems.append(f"'{name}' is an object, not a field; name one of its fields"
                             + (f", e.g. {', '.join(children[:5])}." if children else "."))
-        if name in exact and types <= _TEXT_TYPES:
-            raise ToolError(f"'{name}' is a text field, so exact matches on it rarely work; "
+        elif name in exact and types <= _TEXT_TYPES:
+            problems.append(f"'{name}' is a text field, so exact matches on it rarely work; "
                             + _instead(name, _subfields(name, mapped, aggregatable=True),
                                        "search it with the full-text query instead") + ".")
-        if name in aggregated and not any(c.get('aggregatable') for c in mapped[name].values()):
-            raise ToolError(f"'{name}' can't be grouped by; "
+        elif name in aggregated and not any(c.get('aggregatable') for c in mapped[name].values()):
+            problems.append(f"'{name}' can't be grouped by; "
                             + _instead(name, _subfields(name, mapped, aggregatable=True),
                                        "choose a keyword, numeric, ip, boolean or date field") + ".")
-        if name == timestamp_field and not types & _DATE_TYPES:
-            raise ToolError(f"Timestamp field '{name}' is not a date field; pass a date field as timestamp_field.")
+        elif name == timestamp_field and not types & _DATE_TYPES:
+            problems.append(f"Timestamp field '{name}' is not a date field.")
+    return problems
+
+
+async def check_fields(es: ElasticsearchGateway, index: str, *, filters: Iterable[Filter] = (),
+                       query: str | None = None, aggregated: Iterable[str] = (),
+                       timestamp_field: str | None = None) -> None:
+    """Refuse a tool call whose query or fields are wrong in a way Elasticsearch wouldn't report."""
+    check_lucene(query)
+    filters = list(filters)
+    if problems := await field_problems(es, index, exact=[f.field for f in filters if f.op in _EXACT_OPS],
+                                        aggregated=aggregated, timestamp_field=timestamp_field,
+                                        other=[f.field for f in filters] + sorted(lucene_fields(query))):
+        if any(p.startswith('No field') for p in problems):
+            problems.append(f"Use {es.settings.tool_prefix}describe_fields to list the fields.")
+        raise ToolError(' '.join(problems))

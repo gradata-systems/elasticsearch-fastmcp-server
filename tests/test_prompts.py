@@ -56,3 +56,10 @@ async def test_prompt_uses_given_use_cases_and_copes_without_packs():
     assert 'Ask the user what questions' not in text
     assert '## An existing pack' not in text and '## Existing tools' not in text
     assert '```json\nnot json {\n```' in text
+
+
+async def test_prompt_asks_for_yaml_checked_by_the_validation_tool():
+    text = await _render([], mapping=MAPPING)
+    assert 'Write it in YAML, never JSON' in text
+    assert f'```yaml\n{source_pack.SKELETON}```' in text
+    assert '`validate_source_pack`' in text
