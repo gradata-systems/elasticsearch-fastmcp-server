@@ -201,7 +201,7 @@ async def _composite_buckets(es: ElasticsearchGateway, index: str, query: dict[s
         after_key = agg['after_key']
 
 
-# Sort keys for distinct_values rows: [value, count, first_seen, last_seen, *samples].
+# Sort keys for distinct_values and match_values rows: [value, count, first_seen, last_seen, ...].
 _DISTINCT_ORDER = {
     'last_seen': (lambda row: row[3] or '', True),
     'count': (lambda row: row[1], True),
@@ -384,6 +384,7 @@ async def distinct_values(
     List every distinct value of a field over a time range, with how many events have each and when
     it was first and last seen, plus the number of distinct values. Unlike top_values, rare values
     are not left out, so use it for complete answers to questions like "which X occurred in period Y?".
+    To find which of these values also occur in another data source, use match_values.
     """
     es = gateway_from(ctx)
     await check_fields(es, index, filters=filters, query=query, aggregated=[field], timestamp_field=timestamp_field)
@@ -532,6 +533,118 @@ async def compare_periods(
     return _with_shard_warning(result, failed_page)
 
 
+async def match_values(
+        index: Annotated[str, Field(
+            description="Where the values to check come from: index, alias, data stream or pattern, e.g. a "
+                        "data source's 'index' from list_data_sources.")],
+        field: Annotated[str, Field(
+            description="Field in 'index' whose distinct values are checked, e.g. 'user.name'. Must be "
+                        "keyword, numeric, ip or boolean.")],
+        time_range: Annotated[TimeRange, Field(description="Period in which values are taken from 'index'.")],
+        match_index: Annotated[str, Field(
+            description="Where to look the values up, e.g. another data source's 'index'. May be the same "
+                        "as 'index', with different filters.")],
+        match_field: Annotated[str, Field(
+            description="Field in 'match_index' that holds the same kind of value, e.g. 'user.name' or "
+                        "'winlog.event_data.TargetUserName'. Check it with describe_fields; values must "
+                        "match exactly, including case.")],
+        ctx: Context,
+        filters: Annotated[list[Filter], Field(
+            description="Conditions on 'index' that pick the values to check, e.g. one group or one kind "
+                        "of event.")] = [],
+        query: QueryString = None,
+        match_filters: Annotated[list[Filter], Field(
+            description="Conditions on 'match_index' that count as a match, e.g. successful logons only.")] = [],
+        match_query: QueryString = None,
+        match_time_range: Annotated[TimeRange | None, Field(
+            description="Period to look in 'match_index'. Defaults to 'time_range'.")] = None,
+        show: Annotated[Literal['matched', 'unmatched', 'both'], Field(
+            description="'matched' for values found in 'match_index', 'unmatched' for values that were not, "
+                        "'both' for all of them.")] = 'matched',
+        order: Annotated[Literal['last_seen', 'count', 'value'], Field(
+            description="'last_seen' for most recently matched first, 'count' for most matching events "
+                        "first, 'value' for alphabetical. Matched values always come before unmatched.")
+                        ] = 'last_seen',
+        size: Annotated[int, Field(ge=1, le=1000, description="Maximum number of values to return.")] = 200,
+        timestamp_field: TimestampField = '@timestamp',
+        match_timestamp_field: Annotated[str, Field(
+            description="Timestamp field in 'match_index'. Also used for first_seen and last_seen.")
+                                         ] = '@timestamp',
+) -> dict[str, Any]:
+    """
+    Relate two data sources in one call: take every distinct value of a field in one source (e.g. the
+    users in a VPN log, or members of a group) and find which of them also occur in a field of another
+    source (e.g. successful logons), with how many matching events each has and when it was first and
+    last seen there. Also reports the values that never occur (show='unmatched').
+    Use it for "which of the X in A did Y according to B?" rather than querying B alone and comparing
+    lists yourself, or copying a long list of values from one call into another.
+    """
+    es = gateway_from(ctx)
+    match_time_range = match_time_range or time_range
+    max_days = es.settings.max_aggregation_range_days
+    await check_fields(es, index, filters=filters, query=query, aggregated=[field], timestamp_field=timestamp_field)
+    await check_fields(es, match_index, filters=match_filters, query=match_query, aggregated=[match_field],
+                       timestamp_field=match_timestamp_field)
+
+    # The values to check: every distinct value of `field` in `index`.
+    source_buckets, complete, failed_page = await _composite_buckets(
+        es, index, build_query(time_range, timestamp_field, max_days, filters, query),
+        [{field: {'terms': {'field': field}}}], {})
+    values = [b['key'][field] for b in source_buckets]
+
+    # Look them up a page at a time; each page is one terms filter, and each value at most one bucket.
+    found: dict[str, list[Any]] = {}
+    seen_stats = {'first_seen': {'min': {'field': match_timestamp_field}},
+                  'last_seen': {'max': {'field': match_timestamp_field}}}
+    for i in range(0, len(values), _PAGE_SIZE):
+        page = values[i:i + _PAGE_SIZE]
+        lookup = build_query(match_time_range, match_timestamp_field, max_days, match_filters, match_query,
+                             [{'terms': {match_field: page}}])
+        buckets, _, failed = await _composite_buckets(
+            es, match_index, lookup, [{match_field: {'terms': {'field': match_field}}}], seen_stats)
+        failed_page = failed_page or failed
+        for b in buckets:
+            found[str(b['key'][match_field])] = [b['doc_count'], b['first_seen'].get('value_as_string'),
+                                                 b['last_seen'].get('value_as_string')]
+
+    rows = [[v, *found.get(str(v), [0, None, None])] for v in values]
+    matched = sum(1 for row in rows if row[1])
+    if show == 'matched':
+        rows = [row for row in rows if row[1]]
+    elif show == 'unmatched':
+        rows = [row for row in rows if not row[1]]
+    key, reverse = _DISTINCT_ORDER[order]
+    rows.sort(key=key, reverse=reverse)
+    rows.sort(key=lambda row: not row[1])  # matched values first, keeping the order within each
+    size, capped = _capped(es, size)
+    limited, truncated = fit_to_budget(rows[:size], es.settings.max_response_chars)
+
+    result: dict[str, Any] = {
+        'values_checked': len(values), 'matched': matched, 'unmatched': len(values) - matched,
+        'returned': len(limited),
+        'columns': [field, 'match_count', 'first_seen', 'last_seen'],
+        'rows': limited,
+    }
+    if not complete:
+        result['values_complete'] = False
+        result['hint'] = (f"'{index}' has more than {len(values)} distinct values of '{field}' and only that many "
+                          f"were checked; add filters or narrow the time range for a complete answer.")
+    elif truncated or len(limited) < len(rows):
+        result['truncated'] = True
+        result['hint'] = _cap_hint(es) if capped and not truncated else (
+            "More values exist than were returned; raise size or add filters.")
+    elif values and not matched:
+        result['hint'] = (f"None of the values occur in '{match_field}' of '{match_index}'. Check that it holds "
+                          f"the same kind of value, written the same way (case, domain prefix), for example "
+                          f"with top_values on each field.")
+    packs = ctx.lifespan_context.get('packs', [])
+    notes = [note for note in (retention_note(packs, index, time_range.start),
+                               retention_note(packs, match_index, match_time_range.start)) if note]
+    if notes:
+        result['note'] = ' '.join(dict.fromkeys(notes))
+    return _with_shard_warning(result, failed_page)
+
+
 async def esql_query(
         query: Annotated[str, Field(
             description="ES|QL query starting with FROM, e.g. "
@@ -571,4 +684,4 @@ async def esql_query(
 
 
 ALL_TOOLS = [list_data_sources, describe_fields, search_events, top_values, distinct_values, compare_periods,
-             esql_query]
+             match_values, esql_query]

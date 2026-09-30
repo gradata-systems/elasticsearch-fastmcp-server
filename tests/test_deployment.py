@@ -119,6 +119,7 @@ def test_instructions_name_the_cluster_and_say_to_ask_when_unclear():
     assert 'Microsoft Windows security events (ecs-microsoft-windows-*)' in text
     assert 'Start with prod_list_data_sources' in text
     assert 'never by counting rows yourself' in text and 'use prod_top_values, prod_distinct_values' in text
+    assert 'relates two data sources' in text and 'prod_match_values does both in one call' in text
     # The cluster is chosen by the source packs the caller can read, never by unpacked indices.
     assert "the 'sources' in its prod_list_data_sources result" in text
     assert 'that no source pack describes' in text and 'ask the user which cluster they mean' in text

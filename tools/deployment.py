@@ -78,6 +78,12 @@ def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
                  f"many, use {prefix}top_values, {prefix}distinct_values or {prefix}esql_query with STATS rather than "
                  f"a large search. Show the user only as many rows as they need, and say when a result was "
                  f"truncated.")
+    parts.append(f"When a question relates two data sources, such as which users seen in one have logged on "
+                 f"according to another, plan it as two steps: first get the set of values from the source that "
+                 f"defines them, then look those values up in the other. {prefix}match_values does both in one "
+                 f"call. Don't query only the second source and compare by eye, and don't copy long lists of "
+                 f"values from one result into the next call; to follow up a few values, pass them in an 'in' "
+                 f"filter.")
     if name:
         parts.append(
             "You may also be connected to other deployments of this server for other clusters, offering the same "

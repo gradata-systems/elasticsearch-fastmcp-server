@@ -26,6 +26,7 @@ audit trail.
 | `top_values` | Most frequent values of a field |
 | `distinct_values` | Every value of a field, with counts and first/last seen |
 | `compare_periods` | What stopped, dropped, appeared or rose between two periods |
+| `match_values` | Which values of a field in one source also occur in another, e.g. which VPN users logged on |
 | `esql_query` | Read-only ES\|QL |
 | `validate_source_pack` | Check a pack written with `create_source_pack`, without loading it |
 

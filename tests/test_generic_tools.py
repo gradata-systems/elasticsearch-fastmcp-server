@@ -395,3 +395,78 @@ async def test_searches_that_timed_out_are_marked_partial(es, ctx):
     es.search = AsyncMock(return_value={'timed_out': True, 'hits': {'total': {'value': 1}, 'hits': [{'_source': {}}]}})
     result = await generic.search_events('i', TR, ctx)
     assert 'incomplete' in result['warning'] and 'time limit' in result['warning']
+
+
+def _values_page(field, buckets, after_key=None):
+    """A composite page of `field` values, with first_seen and last_seen when buckets give them."""
+    agg = {'buckets': []}
+    for value, count, *seen in buckets:
+        bucket = {'key': {field: value}, 'doc_count': count}
+        if seen:
+            bucket |= {'first_seen': {'value_as_string': seen[0]}, 'last_seen': {'value_as_string': seen[1]}}
+        agg['buckets'].append(bucket)
+    if after_key:
+        agg['after_key'] = after_key
+    return {'aggregations': {'groups': agg}}
+
+
+async def test_match_values_looks_up_the_first_sources_values_in_the_second(es, ctx):
+    es.search = AsyncMock(side_effect=[
+        _values_page('user.name', [('alice', 3), ('bob', 1), ('carol', 7)]),
+        _values_page('winlog.user', [('alice', 5, '2026-09-01T01:00:00Z', '2026-09-01T09:00:00Z'),
+                                     ('carol', 2, '2026-09-01T02:00:00Z', '2026-09-02T03:00:00Z')]),
+    ])
+    result = await generic.match_values(
+        'vpn-*', 'user.name', TR, 'win-*', 'winlog.user', ctx,
+        filters=[Filter(field='group', value='admins')],
+        match_filters=[Filter(field='event.code', value='4624')])
+    assert result == {
+        'values_checked': 3, 'matched': 2, 'unmatched': 1, 'returned': 2,
+        'columns': ['user.name', 'match_count', 'first_seen', 'last_seen'],
+        'rows': [['carol', 2, '2026-09-01T02:00:00Z', '2026-09-02T03:00:00Z'],
+                 ['alice', 5, '2026-09-01T01:00:00Z', '2026-09-01T09:00:00Z']]}
+    (source_index,), source = es.search.call_args_list[0]
+    (match_index,), lookup = es.search.call_args_list[1]
+    assert source_index == 'vpn-*' and {'term': {'group': 'admins'}} in source['query']['bool']['filter']
+    assert match_index == 'win-*'
+    assert {'terms': {'winlog.user': ['alice', 'bob', 'carol']}} in lookup['query']['bool']['filter']
+    assert {'term': {'event.code': '4624'}} in lookup['query']['bool']['filter']
+    assert lookup['aggs']['groups']['aggs']['last_seen'] == {'max': {'field': '@timestamp'}}
+
+
+async def test_match_values_shows_unmatched_values_and_matches_numbers_to_strings(es, ctx):
+    es.search = AsyncMock(side_effect=[
+        _values_page('id', [('7', 1), ('8', 1)]),
+        _values_page('uid', [(7, 4, None, None)]),
+    ])
+    result = await generic.match_values('a', 'id', TR, 'b', 'uid', ctx, show='both', order='value')
+    assert result['rows'] == [['7', 4, None, None], ['8', 0, None, None]]
+    es.search = AsyncMock(side_effect=[_values_page('id', [('7', 1), ('8', 1)]), _values_page('uid', [])])
+    result = await generic.match_values('a', 'id', TR, 'b', 'uid', ctx, show='unmatched')
+    assert [row[0] for row in result['rows']] == ['7', '8'] and 'same kind of value' in result['hint']
+
+
+async def test_match_values_looks_up_values_a_page_at_a_time(es, ctx, monkeypatch):
+    monkeypatch.setattr(generic, '_PAGE_SIZE', 2)
+    es.search = AsyncMock(side_effect=[
+        _values_page('u', [('a', 1), ('b', 1)], after_key={'u': 'b'}),
+        _values_page('u', [('c', 1)]),
+        _values_page('v', [('a', 1, None, '2026-09-01T00:00:00Z')]),
+        _values_page('v', [('c', 1, None, '2026-09-02T00:00:00Z')]),
+    ])
+    result = await generic.match_values('a', 'u', TR, 'b', 'v', ctx,
+                                        match_time_range=TimeRange(start='2026-08-01', end='2026-09-02'))
+    assert [row[0] for row in result['rows']] == ['c', 'a']
+    lookups = [call.kwargs['query']['bool']['filter'] for call in es.search.call_args_list[2:]]
+    assert [f[1] for f in lookups] == [{'terms': {'v': ['a', 'b']}}, {'terms': {'v': ['c']}}]
+    assert lookups[0][0]['range']['@timestamp']['gte'].startswith('2026-08-01')
+
+
+async def test_match_values_flags_an_incomplete_set_of_values(es, ctx, monkeypatch):
+    monkeypatch.setattr(generic, '_MAX_GROUPS', 1)
+    es.search = AsyncMock(side_effect=[
+        _values_page('u', [('a', 1)], after_key={'u': 'a'}),
+        _values_page('v', [('a', 1, None, None)]),
+    ])
+    result = await generic.match_values('a', 'u', TR, 'b', 'v', ctx)
+    assert result['values_complete'] is False and 'more than 1 distinct' in result['hint']

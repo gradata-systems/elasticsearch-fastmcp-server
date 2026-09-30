@@ -12,7 +12,7 @@ offers them as `prod_search_events` and so on (see [Several clusters](deployment
 - [What results look like](#what-results-look-like)
 - Generic tools: [list_data_sources](#list_data_sources) · [describe_fields](#describe_fields) ·
   [search_events](#search_events) · [top_values](#top_values) · [distinct_values](#distinct_values) ·
-  [compare_periods](#compare_periods) · [esql_query](#esql_query)
+  [compare_periods](#compare_periods) · [match_values](#match_values) · [esql_query](#esql_query)
 - Pack tools: [windows](#windows-pack) · [fortios](#fortios-pack) · [ingress_nginx](#ingress_nginx-pack)
 
 ## Choosing a tool
@@ -24,6 +24,7 @@ offers them as `prod_search_events` and so on (see [Several clusters](deployment
 | What are the most common …? | `top_values` |
 | Which … occurred in period Y? (a complete list) | `distinct_values` |
 | What stopped, dropped, appeared or rose since date X? | `compare_periods` |
+| Which of the … in source A did … according to source B? | `match_values` |
 | Anything else: several group-by fields, computed columns, time buckets | `esql_query` |
 
 Start a session with `list_data_sources`. It lists the index to use for each data source, its key
@@ -453,6 +454,68 @@ Here `habfs02` stopped logging logons completely, and process creation on `habpw
   second field (host, user, rule) to find where the change happened.
 - Raise `min_events` to ignore noise from rare groups. Lower `min_change_percent` to catch smaller
   shifts.
+
+## match_values
+
+Takes every distinct value of a field in one source and looks them up in a field of another,
+reporting which occur there, with how many matching events and when they were first and last
+seen, and which don't.
+
+**Use it** for questions that relate two data sources: which users seen on the VPN logged on to
+Windows, which hosts in the asset list sent no firewall logs, which client IPs that hit the web
+applications were blocked by the firewall. The server enumerates the first source and looks its
+values up in the second in batches, so the model doesn't query only the second source and compare
+lists itself, or copy hundreds of values from one call into the next.
+
+| Argument | Default | Notes |
+|---|---|---|
+| `index`, `field`, `time_range` | required | Where the values come from. Up to 10,000 distinct values are checked. |
+| `match_index`, `match_field` | required | Where to look them up. May be the same index as `index`, with other filters. |
+| `filters`, `query` | none | Pick the values to check in `index`. |
+| `match_filters`, `match_query` | none | What counts as a match in `match_index`. |
+| `match_time_range` | `time_range` | The period to look in `match_index`. |
+| `show` | `matched` | `matched`, `unmatched` or `both`. |
+| `order` | `last_seen` | `last_seen`, `count` or `value`. Matched values always come first. |
+| `size` | 200 | Up to 1000. `values_checked`, `matched` and `unmatched` always give the full counts. |
+| `timestamp_field`, `match_timestamp_field` | `@timestamp` | One for each source. |
+
+Both time ranges can be up to 366 days by default. Values must match exactly, including case: a
+source that writes `DOMAIN\john.smith` won't match one that writes `john.smith`.
+
+**Example:** which users who connected to the VPN this month have also logged on to Windows.
+
+```json
+{
+  "index": "ecs-fortios-*",
+  "field": "user.name",
+  "time_range": {"start": "2026-09-01"},
+  "filters": [{"field": "event.type_id", "op": "prefix", "value": "event-vpn"}],
+  "match_index": "ecs-microsoft-windows-*",
+  "match_field": "user.name",
+  "match_filters": [{"field": "event.code", "value": "4624"}]
+}
+```
+
+```json
+{
+  "values_checked": 38, "matched": 35, "unmatched": 3, "returned": 35,
+  "columns": ["user.name", "match_count", "first_seen", "last_seen"],
+  "rows": [
+    ["john.smith1", 212, "2026-09-01T07:58:12.004Z", "2026-09-30T04:10:55.310Z"],
+    ["jane.doe", 97, "2026-09-02T08:14:40.771Z", "2026-09-29T23:02:18.006Z"]
+  ]
+}
+```
+
+Run it again with `"show": "unmatched"` for the three who never logged on.
+
+**Tips**
+
+- A `hint` saying no values matched usually means the two fields write values differently. Compare
+  a few values with `top_values` on each field.
+- `values_complete: false` means the first source has more than 10,000 values and only the first
+  10,000 were checked. Filter further or shorten the time range.
+- To follow up a handful of values, pass them to another tool in an `in` filter.
 
 ## esql_query
 
