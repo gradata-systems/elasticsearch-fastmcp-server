@@ -24,7 +24,7 @@ TLS, the server logs a warning at startup.
 ## Running the container
 
 CI publishes `ghcr.io/gradata-systems/elasticsearch-fastmcp-server`, tagged by branch (`master`),
-commit (`sha-<short>`) and release version (`0.5.0`, `0.5`). The image runs as a non-root user
+commit (`sha-<short>`) and release version (`0.5.1`, `0.5`). The image runs as a non-root user
 (UID 10001), works with a read-only root filesystem, and bakes in `access_policy.yaml` as a
 default. It includes no source packs, so it offers only the generic tools until you give it some.
 
@@ -34,7 +34,7 @@ docker run -d --name es-mcp --read-only --tmpfs /tmp --cap-drop ALL -p 8443:8000
   --env-file .env \
   -e ES_MCP_ES_CA_CERTS=/etc/es-mcp/es-ca.crt \
   -e ES_MCP_TLS_CERTFILE=/etc/es-mcp/tls/tls.crt -e ES_MCP_TLS_KEYFILE=/etc/es-mcp/tls/tls.key \
-  ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.5.0
+  ghcr.io/gradata-systems/elasticsearch-fastmcp-server:0.5.1
 curl --cacert tls/tls.crt https://localhost:8443/healthz   # "ok"
 ```
 
@@ -139,7 +139,7 @@ curl https://es-mcp.example.com/healthz     # "ok"; the MCP endpoint is /mcp
 Or from the published chart:
 
 ```
-helm upgrade --install es-mcp oci://ghcr.io/gradata-systems/charts/es-mcp --version 0.5.0 \
+helm upgrade --install es-mcp oci://ghcr.io/gradata-systems/charts/es-mcp --version 0.5.1 \
   -n es-mcp -f es-mcp-values.yaml
 ```
 

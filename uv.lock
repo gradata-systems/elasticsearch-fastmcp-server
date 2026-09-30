@@ -468,7 +468,7 @@ wheels = [
 
 [[package]]
 name = "elasticsearch-fastmcp-server"
-version = "0.5.0"
+version = "0.5.1"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
