@@ -63,6 +63,23 @@ async def test_middleware_records_success_and_failure_with_shared_call_id(record
     assert boom_call['outcome'] == 'error' and boom_call['error'] == 'nope'
 
 
+async def test_middleware_records_resource_reads(records):
+    mcp = FastMCP('t', middleware=[AuditMiddleware()])
+
+    @mcp.resource('data://{name}')
+    def data(name: str) -> str:
+        audit('es_search', index='idx')
+        return name
+
+    with patch('security.audit.get_access_token', return_value=TOKEN):
+        async with Client(mcp) as client:
+            await client.read_resource('data://x')
+
+    search, read = records
+    assert search['call_id'] == read['call_id'] is not None
+    assert read['event'] == 'resource_read' and read['uri'] == 'data://x' and read['outcome'] == 'success'
+
+
 @pytest.mark.skipif(sys.platform == 'win32', reason='Windows cannot rename a file that is open')
 def test_audit_file_is_reopened_after_rotation(tmp_path):
     path = tmp_path / 'audit.jsonl'

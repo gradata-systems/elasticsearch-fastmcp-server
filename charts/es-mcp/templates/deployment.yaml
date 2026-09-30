@@ -111,6 +111,8 @@ spec:
               value: {{ .Values.toolPrefix | quote }}
             - name: ES_MCP_MAX_RESULT_SIZE
               value: {{ .Values.limits.maxResultSize | quote }}
+            - name: ES_MCP_MAX_EXPORT_ROWS
+              value: {{ .Values.limits.maxExportRows | quote }}
             - name: ES_MCP_MAX_RESPONSE_CHARS
               value: {{ .Values.limits.maxResponseChars | quote }}
             - name: ES_MCP_MAX_TIME_RANGE_DAYS

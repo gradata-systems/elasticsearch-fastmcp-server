@@ -63,6 +63,7 @@ oidc:
 
 limits:
   maxResultSize: 500
+  maxExportRows: 10000
   maxResponseChars: 100000
   maxTimeRangeDays: 90
   maxAggregationRangeDays: 366

@@ -28,6 +28,7 @@ audit trail.
 | `compare_periods` | What stopped, dropped, appeared or rose between two periods |
 | `match_values` | Which values of a field in one source also occur in another, e.g. which VPN users logged on |
 | `esql_query` | Read-only ES\|QL |
+| `export_events` | A link the user opens or saves to get up to 10,000 matching events as CSV or NDJSON |
 | `validate_source_pack` | Check a pack written with `create_source_pack`, without loading it |
 
 Source packs describe your data sources and add curated tools for them. None are loaded by

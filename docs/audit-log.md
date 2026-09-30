@@ -31,6 +31,7 @@ works without a restart. Don't use `copytruncate`, which can lose lines written 
 | `tool_call` | every tool invocation, when it finishes | `tool`, `arguments`, `outcome` (`success` or `error`), `error`, `duration_ms` |
 | `es_request` | every Elasticsearch request | `api` (`search`, `esql`, `field_caps`, `resolve_index`), `es_user`, `index`, `request`, `outcome` (`success`, `partial` or `error`), `error`, `took_ms`, and result counts |
 | `access_denied` | a request refused by the server or by Elasticsearch | `reason`, `es_user`, `index`, and `api` and `request` where there is one |
+| `resource_read` | every resource read, such as opening an `export_events` link, when it finishes | `uri`, `outcome`, `error`, `duration_ms` |
 | `call_refused` | a tool call stopped by the server's call limits | `tool`, `arguments`, `reason`: `repeated` (the same call made too often, see `ES_MCP_MAX_REPEATED_CALLS`) or `timeout` (longer than `ES_MCP_TOOL_TIMEOUT`) |
 
 Result counts depend on the API: `hits_returned`, `hits_total` and `shards_failed` for searches,
@@ -52,7 +53,7 @@ Every event also carries:
 - `cluster`: the deployment's `ES_MCP_CLUSTER_NAME`, when set, so that trails from several
   deployments can be told apart
 - `sub`, `username` and `client_id`: who called, from the access token
-- `call_id`: links a `tool_call` to the `es_request` and `access_denied` events it caused
+- `call_id`: links a `tool_call` or `resource_read` to the `es_request` and `access_denied` events it caused
 
 ## Example
 

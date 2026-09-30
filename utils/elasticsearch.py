@@ -141,9 +141,10 @@ class ElasticsearchGateway:
         audit('es_request', outcome=outcome, request=request, **summarize(body), **who)
         return body
 
-    async def search(self, index: str, **params: Any) -> dict[str, Any]:
+    async def search(self, index: str, limit: int | None = None, **params: Any) -> dict[str, Any]:
+        """Search `index`, returning at most `limit` hits (by default, ES_MCP_MAX_RESULT_SIZE)."""
         if 'size' in params:
-            params['size'] = max(0, min(params['size'], self.settings.max_result_size))
+            params['size'] = max(0, min(params['size'], limit or self.settings.max_result_size))
         # Stop searching shortly before the client gives up, and return what was found so far.
         params.setdefault('timeout', f'{int(self.settings.es_request_timeout * 900)}ms')
         return await self._execute('search', index, params,

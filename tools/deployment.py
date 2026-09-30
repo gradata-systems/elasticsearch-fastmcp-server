@@ -9,12 +9,13 @@ from typing import Any, Iterable
 
 from fastmcp import FastMCP
 from fastmcp.prompts import Prompt
+from fastmcp.resources import ResourceTemplate
 from fastmcp.tools import Tool
 
 from config import Settings
 from prompts import source_pack
 from sources.packs import SourcePack, SourceTool
-from tools import generic, pack_validation
+from tools import export, generic, pack_validation
 
 # Longest tool name many model APIs accept (^[a-zA-Z0-9_-]{1,64}$).
 MAX_NAME_LENGTH = 64
@@ -84,6 +85,9 @@ def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
                  f"call. Don't query only the second source and compare by eye, and don't copy long lists of "
                  f"values from one result into the next call; to follow up a few values, pass them in an 'in' "
                  f"filter.")
+    parts.append(f"When the user wants the events themselves, to download or keep, rather than an answer, use "
+                 f"{prefix}export_events: it gives them a link to a CSV or NDJSON file without the events "
+                 f"passing through you.")
     if name:
         parts.append(
             "You may also be connected to other deployments of this server for other clusters, offering the same "
@@ -97,14 +101,18 @@ def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
 
 
 def register(mcp: FastMCP, settings: Settings, packs: list[SourcePack]) -> None:
-    """Add the generic tools, the packs' tools and the prompts to `mcp`, prefixed as configured."""
-    functions = generic.ALL_TOOLS + pack_validation.ALL_TOOLS
+    """Add the generic tools, the packs' tools, the export links and the prompts to `mcp`, prefixed as
+    configured."""
+    functions = generic.ALL_TOOLS + export.ALL_TOOLS + pack_validation.ALL_TOOLS
     names = [fn.__name__ for fn in functions] + [spec.name for pack in packs for spec in pack.tools]
     for fn in functions:
         mcp.add_tool(qualified(Tool.from_function(fn), names, settings))
     for pack in packs:
         for spec in pack.tools:
             mcp.add_tool(qualified(SourceTool.build(pack, spec), names, settings))
+    mcp.add_template(ResourceTemplate.from_function(
+        export.read_export, export.URI_TEMPLATE, name=settings.tool_prefix + 'export', mime_type='text/csv',
+        description=qualify(export.read_export.__doc__, names, settings.tool_prefix)))
     for fn in source_pack.ALL_PROMPTS:
         prompt = Prompt.from_function(fn)
         mcp.add_prompt(prompt.model_copy(update={'name': settings.tool_prefix + prompt.name}))

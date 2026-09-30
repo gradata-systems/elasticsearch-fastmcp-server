@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     es_request_timeout: float = Field(default=30.0, gt=0)
     # Most rows any tool returns.
     max_result_size: int = Field(default=500, ge=1)
+    # Most events an export link returns. Exports go to the user, not the model, so this can be much
+    # larger; Elasticsearch returns at most 10,000 hits to one search by default.
+    max_export_rows: int = Field(default=10_000, ge=1, le=10_000)
     # Upper bound on serialized tool output, to protect the model's context window.
     max_response_chars: int = Field(default=100_000, ge=1000)
     max_time_range_days: int = Field(default=90, ge=1)

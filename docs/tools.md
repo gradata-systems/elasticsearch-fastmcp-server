@@ -12,7 +12,8 @@ offers them as `prod_search_events` and so on (see [Several clusters](deployment
 - [What results look like](#what-results-look-like)
 - Generic tools: [list_data_sources](#list_data_sources) · [describe_fields](#describe_fields) ·
   [search_events](#search_events) · [top_values](#top_values) · [distinct_values](#distinct_values) ·
-  [compare_periods](#compare_periods) · [match_values](#match_values) · [esql_query](#esql_query)
+  [compare_periods](#compare_periods) · [match_values](#match_values) · [esql_query](#esql_query) ·
+  [export_events](#export_events)
 - Pack tools: [windows](#windows-pack) · [fortios](#fortios-pack) · [ingress_nginx](#ingress_nginx-pack)
 
 ## Choosing a tool
@@ -26,6 +27,7 @@ offers them as `prod_search_events` and so on (see [Several clusters](deployment
 | What stopped, dropped, appeared or rose since date X? | `compare_periods` |
 | Which of the … in source A did … according to source B? | `match_values` |
 | Anything else: several group-by fields, computed columns, time buckets | `esql_query` |
+| Give me the events as a file | `export_events` |
 
 Start a session with `list_data_sources`. It lists the index to use for each data source, its key
 fields, its retention and its pack tools. A pack tool is the quickest route when one matches the
@@ -564,6 +566,63 @@ other tools when they fit, because they check arguments and explain their result
   write the field bare, or in backticks if it contains special characters.
 
 ---
+
+## export_events
+
+Gives the user a link to the events matching a search, as a CSV or NDJSON file, without the
+events passing through the model. The tool returns only the count and the link.
+
+**Use it** when the user wants the events themselves rather than an answer: more rows than
+`search_events` returns, or data to work with in a spreadsheet, a notebook or their editor.
+
+| Argument | Default | Notes |
+|---|---|---|
+| `index`, `time_range` | required | As for `search_events`, including the 90-day limit. An open-ended period is fixed at the time of the call, so the link always returns the same events. |
+| `filters`, `query` | none | |
+| `fields` | whole events | Named exactly, the export is CSV with one column per field. Left out, or with wildcards, it is NDJSON: one flattened event per line. |
+| `sort` | `desc` | Which events are kept when there are more than the limit: the most recent (`desc`) or the earliest (`asc`). |
+| `timestamp_field` | `@timestamp` | |
+
+An export holds up to `ES_MCP_MAX_EXPORT_ROWS` events (default 10,000). The `hint` says when the
+search matches more.
+
+**Example:** every logon on one host in September, as CSV.
+
+```json
+{
+  "index": "ecs-microsoft-windows-*",
+  "time_range": {"start": "2026-09-01", "end": "2026-09-30"},
+  "filters": [{"field": "event.code", "value": "4624"},
+              {"field": "host.hostname", "value": "habfs02.intranet.gradata.com.au"}],
+  "fields": ["@timestamp", "user.name", "user.domain", "client.ip"]
+}
+```
+
+The result holds a JSON summary and a `resource_link`:
+
+```json
+{
+  "total": 4180, "exported": 4180, "format": "csv",
+  "uri": "elasticsearch://export/eNqNkM1u.../ecs-microsoft-windows-20260901-20260930.csv",
+  "note": "The user can open or save the export from the link in this result. ..."
+}
+```
+
+**Opening it.** Only clients that show resource links can open an export. In VS Code, the link
+appears in the tool's output in chat. Open it to view the file, save it into the workspace, or
+attach it to the chat as context. Clients that ignore resource links, such as OpenWebUI, show
+only the summary.
+
+**How the link works**
+
+- The link holds the search itself, compressed, rather than an ID for a stored result. Opening it
+  runs the search again, so nothing is kept on the server and any replica can serve it.
+- The search runs as whoever opens the link, with their own Elasticsearch permissions and the
+  server's `exposed_indices`. A link passed to someone else returns only what they may read.
+- Each read is audited as a `resource_read` event, followed by the `es_request` it made.
+- The link isn't a token that grants access: anyone could write one by hand, and it would be no
+  more powerful than calling `search_events` directly.
+- Events that arrive late, or are deleted by retention, change what a later read returns.
 
 ## Pack tools
 
