@@ -81,7 +81,7 @@ tools:
 | `params` | all | Named arguments. See [Parameters](#parameters). |
 | `filters` | all | Fixed conditions, in the same format as `search_events` filters (see the [tool guide](tools.md#filters)). |
 | `query` | all | A fixed Lucene query, combined with the filters. |
-| `size` | all | Default number of results. Callers can raise it to 500 (search), 100 (top values) or 1000 (distinct values). |
+| `size` | all | Default number of results. Callers can raise it to 100 (search), 100 (top values) or 1000 (distinct values). |
 | `fields` | search | Fields to return. Defaults to the pack's `default_fields`. |
 | `sort` | search | `desc` (most recent first, the default) or `asc`. |
 | `field` | top_values, distinct_values | The field to rank or list. Required. |

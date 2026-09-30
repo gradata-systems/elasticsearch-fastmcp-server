@@ -120,10 +120,36 @@ def field_value(source: dict[str, Any], field: str) -> Any:
     return value
 
 
+def flatten(source: dict[str, Any], prefix: str = '') -> dict[str, Any]:
+    """A document with nested objects turned into dotted keys; lists are kept as they are."""
+    flat: dict[str, Any] = {}
+    for key, value in source.items():
+        if isinstance(value, dict) and value:
+            flat |= flatten(value, f'{prefix}{key}.')
+        else:
+            flat[prefix + key] = value
+    return flat
+
+
+# Longest string value returned; longer ones (a huge message or command line) are shortened.
+MAX_VALUE_CHARS = 2000
+
+
+def shorten(value: Any) -> Any:
+    """`value` with every string longer than MAX_VALUE_CHARS cut short and marked as such."""
+    if isinstance(value, str) and len(value) > MAX_VALUE_CHARS:
+        return f"{value[:MAX_VALUE_CHARS]}... [{len(value) - MAX_VALUE_CHARS} more characters not shown]"
+    if isinstance(value, dict):
+        return {k: shorten(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [shorten(v) for v in value]
+    return value
+
+
 def fit_to_budget(rows: list[Any], max_chars: int) -> tuple[list[Any], bool]:
-    """Keep leading rows whose combined JSON size fits within `max_chars`."""
+    """Keep leading rows whose combined JSON size fits within `max_chars`, with long strings shortened."""
     kept, used = [], 0
-    for row in rows:
+    for row in map(shorten, rows):
         used += len(json.dumps(row, default=str))
         if used > max_chars:
             return kept, True

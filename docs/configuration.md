@@ -53,11 +53,28 @@ limit many model APIs place on tool names.
 |---|---|---|---|
 | `ES_MCP_MAX_TIME_RANGE_DAYS` | `limits.maxTimeRangeDays` | `90` | Longest time range for tools that return events: `search_events`, pack search tools and ES\|QL without `STATS`. |
 | `ES_MCP_MAX_AGGREGATION_RANGE_DAYS` | `limits.maxAggregationRangeDays` | `366` | Longest time range for tools that return counts: `top_values`, `distinct_values`, each period of `compare_periods`, pack tools of those kinds and ES\|QL with `STATS`. |
-| `ES_MCP_MAX_RESULT_SIZE` | `limits.maxResultSize` | `500` | Most events a search returns, and most rows an ES\|QL query returns. |
+| `ES_MCP_MAX_RESULT_SIZE` | `limits.maxResultSize` | `500` | Most rows any tool returns: events, values, changed groups or ES\|QL rows. Tool schemas show it as the `size` maximum, and results cut short by it say so. |
+| `ES_MCP_TOOL_TIMEOUT` | `limits.toolTimeoutSeconds` | `60` | Longest a whole tool call may take, in seconds, however many Elasticsearch requests it makes. The call is then stopped with an error, and Elasticsearch cancels the search when the connection closes. |
+| `ES_MCP_MAX_REPEATED_CALLS` | `limits.maxRepeatedCalls` | `3` | How many identical calls (same user, tool and arguments) may run within the window below. Further ones are refused with an error telling the model to use the earlier result. |
+| `ES_MCP_REPEATED_CALL_WINDOW_SECONDS` | `limits.repeatedCallWindowSeconds` | `300` | The window for `ES_MCP_MAX_REPEATED_CALLS`. |
 | `ES_MCP_MAX_RESPONSE_CHARS` | `limits.maxResponseChars` | `100000` | Most characters of JSON a tool returns, to protect the model's context window. Longer results are cut off, with `truncated: true` and a hint. |
 
-The limits apply to every caller. Raise them with care: a larger response budget costs the model
+Each Elasticsearch search also carries a server-side `timeout` of 90% of `ES_MCP_ES_REQUEST_TIMEOUT`,
+so it stops shortly before the client gives up and returns what it found, marked as incomplete.
+String values longer than 2,000 characters are shortened in results, and marked as such.
+
+Repeated calls are counted in each replica's memory. With several replicas, a client whose calls
+are spread across them may make up to that many identical calls per replica.
+
+The limits apply to every caller. The server refuses to start if one is below 1 (below 1000 for
+`ES_MCP_MAX_RESPONSE_CHARS`). Raise them with care: a larger response budget costs the model
 context, and a longer event search range costs Elasticsearch.
+
+For models with a small context window, such as many local models served through Ollama and
+OpenWebUI, lower `ES_MCP_MAX_RESPONSE_CHARS` (for example to 20000) and `ES_MCP_MAX_RESULT_SIZE`
+(for example to 100). Also check the context length configured for the model (Ollama's
+`num_ctx`): results beyond it are dropped without warning, and the model then invents what it
+can't see.
 
 ### Policy, packs and audit
 

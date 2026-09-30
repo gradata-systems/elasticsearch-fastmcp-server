@@ -131,11 +131,24 @@ supply values.
 
 ## What results look like
 
-Each tool returns a JSON object, and some keys appear in any result:
+Each tool returns a JSON object. Lists of results come as a table, so each field name appears once
+rather than in every row:
+
+```json
+{"columns": ["user.name", "count"], "rows": [["alice", 60], ["bob", 30]]}
+```
+
+`search_events` and pack search tools return a table when the fields to return are named exactly,
+and otherwise a list of `events`, each flattened to dotted field names. Searches for 20 events or
+more also return a `summary` of every matching event, computed by Elasticsearch rather than from
+the returned rows (see [search_events](#search_events)). The server instructions tell agents to take
+counts from these numbers rather than counting rows.
+
+Some keys appear in any result:
 
 | Key | Meaning |
 |---|---|
-| `truncated` + `hint` | More results existed than fit in the response (`ES_MCP_MAX_RESPONSE_CHARS`, default 100,000 characters) or the requested `size`. The hint says how to narrow the query. |
+| `truncated` + `hint` | More results existed than fit in the response (`ES_MCP_MAX_RESPONSE_CHARS`, default 100,000 characters), the requested `size`, or the server's row limit (`ES_MCP_MAX_RESULT_SIZE`, default 500, which also lowers every tool's `size` maximum). The hint says how to narrow the query. |
 | `note` | Context for reading the result. Most often, the period reaches back further than the data source keeps every event (its `retention_days`), so older results are incomplete. |
 | `warning` | Some shards failed, so the result is partial. If every shard fails, the tool returns an error instead. |
 
@@ -219,8 +232,8 @@ number of matches, but for "how many per …" use `top_values`, `distinct_values
 |---|---|---|
 | `index`, `time_range` | required | Up to 90 days by default. |
 | `filters`, `query` | none | See [Common arguments](#common-arguments). |
-| `fields` | whole events | Fields to return, wildcards allowed. Asking for only the fields you need means more events fit in the response. |
-| `size` | 20 | Up to 500. |
+| `fields` | whole events | Fields to return, as a table with one column each. With wildcards, or left out, whole events are returned instead, flattened to dotted field names, which is much larger. |
+| `size` | 20 | Up to 100. From 20, the result includes a `summary`. |
 | `sort` | `desc` | `desc` for most recent first, `asc` for chronological order. |
 | `timestamp_field` | `@timestamp` | |
 
@@ -241,13 +254,28 @@ number of matches, but for "how many per …" use `top_values`, `distinct_values
 {
   "total": 3,
   "returned": 3,
-  "events": [
-    {"index": ".ds-ecs-microsoft-windows-rs-default-2026.09.15-000014", "id": "hT2x...",
-     "event": {"@timestamp": "2026-09-23T07:41:12.004Z", "host": {"hostname": "habdc01.intranet.gradata.com.au"},
-               "client": {"ip": "10.20.4.17"}, "event": {"outcome": "failure"}}}
-  ]
+  "columns": ["@timestamp", "host.hostname", "client.ip", "event.outcome"],
+  "rows": [
+    ["2026-09-23T07:41:12.004Z", "habdc01.intranet.gradata.com.au", "10.20.4.17", "failure"]
+  ],
+  "summary": {
+    "first_event": "2026-09-23T07:41:12.004Z",
+    "last_event": "2026-09-24T11:02:45.310Z",
+    "top_values": {
+      "event.code": [["4625", 3]],
+      "host.hostname": [["habdc01.intranet.gradata.com.au", 2], ["habdc02.intranet.gradata.com.au", 1]],
+      "client.ip": [["10.20.4.17", 3]],
+      "event.outcome": [["failure", 3]]
+    },
+    "note": "Covers all 3 matching events, not only the rows returned. Take counts from here and from 'total' rather than counting rows."
+  }
 }
 ```
+
+**The summary.** With `size` 20 or more, the same request also asks Elasticsearch for the first
+and last matching event and the five most common values of up to six fields, over *every* matching
+event rather than just the rows returned. The fields are the data source's `event_type_field` and
+the requested `fields` that can be aggregated. Pack search tools use the pack's fields.
 
 **Tips**
 
@@ -287,15 +315,18 @@ returns the top N only. Rare values are left out and counted together in
 ```json
 {
   "total_events": 1843,
-  "values": [
-    {"value": "203.0.113.7", "count": 912, "sample": {"source.geo.country_iso_code": "AU"}},
-    {"value": "198.51.100.23", "count": 140, "sample": {"source.geo.country_iso_code": "US"}}
-  ],
-  "events_with_other_values": 211
+  "events_with_other_values": 211,
+  "columns": ["source.ip", "count", "source.geo.country_iso_code"],
+  "rows": [
+    ["203.0.113.7", 912, "AU"],
+    ["198.51.100.23", 140, "US"]
+  ]
 }
 ```
 
-If `total_events` is non-zero but `values` is empty, none of the matching events have the field.
+The `include_fields` come after `count`, taken from one example event per value.
+
+If `total_events` is non-zero but `rows` is empty, none of the matching events have the field.
 The `hint` suggests checking the name with `describe_fields`.
 
 ## distinct_values
@@ -333,9 +364,10 @@ alphabetically.
 {
   "distinct_values": 47,
   "returned": 47,
-  "values": [
-    {"value": "AE", "count": 12, "first_seen": "2026-02-11T03:12:40.118Z", "last_seen": "2026-06-30T22:01:09.550Z"},
-    {"value": "AU", "count": 2210453, "first_seen": "2025-09-30T00:00:00.912Z", "last_seen": "2026-09-29T05:58:31.020Z"}
+  "columns": ["source.geo.country_iso_code", "count", "first_seen", "last_seen"],
+  "rows": [
+    ["AE", 12, "2026-02-11T03:12:40.118Z", "2026-06-30T22:01:09.550Z"],
+    ["AU", 2210453, "2025-09-30T00:00:00.912Z", "2026-09-29T05:58:31.020Z"]
   ]
 }
 ```
@@ -399,11 +431,11 @@ compared with August.
   "before_days": 31.0, "after_days": 28.5,
   "before_events": 1204411, "after_events": 1011930,
   "groups_compared": 312, "groups_changed": 2, "returned": 2,
-  "changes": [
-    {"group": {"event.code": "4624", "host.hostname": "habfs02.intranet.gradata.com.au"}, "status": "stopped",
-     "before_count": 9300, "after_count": 0, "before_per_day": 300.0, "after_per_day": 0.0, "change_percent": -100},
-    {"group": {"event.code": "4688", "host.hostname": "habpw01.intranet.gradata.com.au"}, "status": "dropped",
-     "before_count": 3100, "after_count": 855, "before_per_day": 100.0, "after_per_day": 30.0, "change_percent": -70}
+  "columns": ["event.code", "host.hostname", "status", "before_count", "after_count", "before_per_day",
+              "after_per_day", "change_percent"],
+  "rows": [
+    ["4624", "habfs02.intranet.gradata.com.au", "stopped", 9300, 0, 300.0, 0.0, -100],
+    ["4688", "habpw01.intranet.gradata.com.au", "dropped", 3100, 855, 100.0, 30.0, -70]
   ]
 }
 ```
@@ -450,8 +482,8 @@ other tools when they fit, because they check arguments and explain their result
   "columns": ["errors", "day", "url.domain"],
   "returned": 31,
   "rows": [
-    {"errors": 412, "day": "2026-09-15T00:00:00.000Z", "url.domain": "auth.gradata.com.au"},
-    {"errors": 3, "day": "2026-09-15T00:00:00.000Z", "url.domain": "www.gradata.com.au"}
+    [412, "2026-09-15T00:00:00.000Z", "auth.gradata.com.au"],
+    [3, "2026-09-15T00:00:00.000Z", "www.gradata.com.au"]
   ]
 }
 ```
@@ -459,7 +491,8 @@ other tools when they fit, because they check arguments and explain their result
 **Limits and tips**
 
 - Results are capped at `ES_MCP_MAX_RESULT_SIZE` rows (default 500) and the response size budget.
-  Aggregate with `STATS` rather than returning raw rows.
+  Aggregate with `STATS` rather than returning raw rows. A query without `STATS` that returns 20
+  rows or more gets a `hint` to count with `STATS` instead.
 - The indices in `FROM` and any `LOOKUP JOIN` are checked against the exposed patterns. Subqueries
   and comments inside the `FROM` clause are rejected.
 - Retention notes work as for the other tools, based on the indices in `FROM`.
@@ -476,7 +509,7 @@ from the pack, and it takes a few named arguments. Every pack tool also takes:
 
 - `time_range` (required). Search tools allow up to 90 days by default; top-values and
   distinct-values tools up to 366.
-- `size`. The default comes from the pack; the maximum is 500 for search, 100 for top-values and
+- `size`. The default comes from the pack; the maximum is 100 for search, 100 for top-values and
   1000 for distinct-values tools.
 
 Results have the same shape as the generic tool of the same kind (`search_events`, `top_values`
@@ -507,8 +540,8 @@ windows_logon_users {"time_range": {"start": "2025-09-30"}}
 ```json
 {
   "distinct_values": 214, "returned": 214,
-  "values": [{"value": "john.smith1", "count": 1893, "first_seen": "2025-10-02T21:14:03.000Z",
-              "last_seen": "2026-09-29T06:02:11.000Z", "sample": {"user.id": "S-1-5-21-...-1104", "user.domain": "INTRANET"}}],
+  "columns": ["user.name", "count", "first_seen", "last_seen", "user.id", "user.domain"],
+  "rows": [["john.smith1", 1893, "2025-10-02T21:14:03.000Z", "2026-09-29T06:02:11.000Z", "S-1-5-21-...-1104", "INTRANET"]],
   "note": "Microsoft Windows security events keeps every event for only 60 days (since 2026-07-31); before that it holds only a subset, so fewer or no events there don't mean nothing happened."
 }
 ```
@@ -583,10 +616,9 @@ fortios_top_destinations {"source_ip": "10.20.4.17", "time_range": {"start": "20
 ```json
 {
   "total_events": 5120,
-  "values": [{"value": "142.250.66.206", "count": 1210,
-              "sample": {"destination.port": 443, "destination.domain": "www.google.com",
-                         "destination.application.name": "Google.Services"}}],
-  "events_with_other_values": 1733
+  "events_with_other_values": 1733,
+  "columns": ["destination.ip", "count", "destination.port", "destination.domain", "destination.application.name"],
+  "rows": [["142.250.66.206", 1210, 443, "www.google.com", "Google.Services"]]
 }
 ```
 

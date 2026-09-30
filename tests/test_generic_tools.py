@@ -81,10 +81,9 @@ async def test_search_events_builds_request_and_shapes_hits(es, ctx):
         {'_index': 'i', '_id': '1', '_source': {'user': {'name': 'alice'}}}]}})
     result = await generic.search_events('i', TR, ctx, filters=[Filter(field='user.name', value='alice')],
                                          fields=['user.name'], size=5, sort='asc')
-    assert result == {'total': 42, 'returned': 1,
-                      'events': [{'index': 'i', 'id': '1', 'event': {'user': {'name': 'alice'}}}]}
+    assert result == {'total': 42, 'returned': 1, 'columns': ['user.name'], 'rows': [['alice']]}
     index, params = es.search.call_args.args[0], es.search.call_args.kwargs
-    assert index == 'i' and params['size'] == 5 and params['_source'] == ['user.name']
+    assert index == 'i' and params['size'] == 5 and params['_source'] == ['user.name'] and 'aggs' not in params
     assert params['sort'] == [{'@timestamp': {'order': 'asc', 'unmapped_type': 'date'}}]
     assert {'term': {'user.name': 'alice'}} in params['query']['bool']['filter']
 
@@ -94,8 +93,8 @@ async def test_top_values(es, ctx):
         'buckets': [{'key': 'alice', 'doc_count': 60}, {'key': 1, 'key_as_string': 'true', 'doc_count': 30}],
         'sum_other_doc_count': 10}}})
     result = await generic.top_values('i', 'user.name', TR, ctx, size=2)
-    assert result == {'total_events': 100, 'events_with_other_values': 10,
-                      'values': [{'value': 'alice', 'count': 60}, {'value': 'true', 'count': 30}]}
+    assert result == {'total_events': 100, 'events_with_other_values': 10, 'columns': ['user.name', 'count'],
+                      'rows': [['alice', 60], ['true', 30]]}
     assert es.search.call_args.kwargs['aggs'] == {'top': {'terms': {'field': 'user.name', 'size': 2}}}
 
 
@@ -117,7 +116,7 @@ async def test_esql_applies_time_filter_and_caps_rows(es, ctx):
     es.esql = AsyncMock(return_value={'columns': [{'name': 'n'}, {'name': 'c'}],
                                       'values': [['a', 1], ['b', 2], ['c', 3]]})
     result = await generic.esql_query('FROM i | STATS c = COUNT(*) BY n', TR, ctx, timestamp_field='ts')
-    assert result['rows'] == [{'n': 'a', 'c': 1}, {'n': 'b', 'c': 2}] and result['truncated']
+    assert result['columns'] == ['n', 'c'] and result['rows'] == [['a', 1], ['b', 2]] and result['truncated']
     query, time_filter = es.esql.call_args.args
     assert 'ts' in time_filter['range']
 
@@ -174,11 +173,10 @@ async def test_compare_periods_pages_through_groups_and_ranks_drops(es, ctx):
     ])
     result = await generic.compare_periods('i', BEFORE, AFTER, ctx, group_by=['event.code'])
 
-    assert [(c['group']['event.code'], c['status']) for c in result['changes']] == [
-        ('4624', 'stopped'), ('4688', 'dropped')]
-    assert result['changes'][1] == {
-        'group': {'event.code': '4688'}, 'status': 'dropped', 'before_count': 200, 'after_count': 20,
-        'before_per_day': 20.0, 'after_per_day': 4.0, 'change_percent': -80}
+    assert result['columns'] == ['event.code', 'status', 'before_count', 'after_count', 'before_per_day',
+                                 'after_per_day', 'change_percent']
+    assert result['rows'] == [['4624', 'stopped', 1000, 0, 100.0, 0.0, -100],
+                              ['4688', 'dropped', 200, 20, 20.0, 4.0, -80]]
     assert result['groups_compared'] == 5 and result['groups_changed'] == 2
     assert result['before_days'] == 10.0 and result['after_days'] == 5.0
 
@@ -195,8 +193,7 @@ async def test_compare_periods_reports_increases_when_asked(es, ctx):
     es.search = AsyncMock(return_value=_groups_page([
         ({'h': 'a'}, 100, 0), ({'h': 'b'}, 0, 40), ({'h': 'c'}, 10, 50), ({'h': 'd'}, 10, 5)]))
     result = await generic.compare_periods('i', BEFORE, AFTER, ctx, ['h'], changes='up')
-    assert [(c['group']['h'], c['status'], c['change_percent']) for c in result['changes']] == [
-        ('c', 'increased', 900), ('b', 'new', None)]
+    assert [(r[0], r[1], r[-1]) for r in result['rows']] == [('c', 'increased', 900), ('b', 'new', None)]
 
 
 async def test_compare_periods_checks_each_period_separately(es, ctx):
@@ -263,9 +260,9 @@ async def test_distinct_values_lists_every_value_across_pages(es, ctx):
     # A year: past the event search limit but within the aggregation limit.
     result = await generic.distinct_values('i', 'user.name', TimeRange(start='2025-10-01', end='2026-09-28'), ctx)
     assert result['distinct_values'] == 3
-    assert [v['value'] for v in result['values']] == ['bob', 'carol', 'alice']  # most recently seen first
-    assert result['values'][0] == {'value': 'bob', 'count': 1, 'first_seen': '2026-02-01T00:00:00Z',
-                                   'last_seen': '2026-09-01T00:00:00Z'}
+    assert result['columns'] == ['user.name', 'count', 'first_seen', 'last_seen']
+    assert [row[0] for row in result['rows']] == ['bob', 'carol', 'alice']  # most recently seen first
+    assert result['rows'][0] == ['bob', 1, '2026-02-01T00:00:00Z', '2026-09-01T00:00:00Z']
     first, second = (call.kwargs for call in es.search.call_args_list)
     assert first['aggs']['groups']['composite']['sources'] == [{'user.name': {'terms': {'field': 'user.name'}}}]
     assert first['aggs']['groups']['aggs']['last_seen'] == {'max': {'field': '@timestamp'}}
@@ -277,7 +274,7 @@ async def test_distinct_values_orders_and_flags_incomplete_lists(es, ctx, monkey
     es.search = AsyncMock(return_value=_distinct_page(
         [('alice', 5, None, None), ('bob', 9, None, None)], after_key={'user.name': 'bob'}))
     result = await generic.distinct_values('i', 'user.name', TR, ctx, order='count', size=1)
-    assert [v['value'] for v in result['values']] == ['bob']
+    assert [row[0] for row in result['rows']] == ['bob']
     assert result['distinct_values_complete'] is False and 'more than 2' in result['hint']
 
 
@@ -312,3 +309,89 @@ async def test_esql_with_stats_allows_the_aggregation_range_and_notes_retention(
         await generic.esql_query('FROM win-* | WHERE message == "| STATS" | LIMIT 5', year, ctx)
     with pytest.raises(ToolError, match='maximum of 90 days'):
         await generic.esql_query('FROM win-* | INLINE STATS n = COUNT(*) | LIMIT 5', year, ctx)
+
+
+async def test_larger_searches_summarise_every_matching_event(es, ctx):
+    from sources.packs import SourcePack
+    ctx.lifespan_context['packs'] = [SourcePack(name='w', title='W', description='d', index='i*',
+                                                event_type_field='event.code')]
+    es.field_caps = AsyncMock(side_effect=lambda index, fields: mapping(
+        '@timestamp', 'event.code', 'user.name', message='text'))
+    es.search = AsyncMock(return_value={
+        'hits': {'total': {'value': 812}, 'hits': [{'_source': {'user': {'name': 'a'}, 'event': {'code': '1'}}}]},
+        'aggregations': {'first': {'value_as_string': '2026-09-01T00:00:00Z'},
+                         'last': {'value_as_string': '2026-09-02T00:00:00Z'},
+                         'top_0': {'buckets': [{'key': '4624', 'doc_count': 800}]},
+                         'top_1': {'buckets': [{'key': 'a', 'doc_count': 500}, {'key': 'b', 'doc_count': 312}]}}})
+    result = await generic.search_events('i', TR, ctx, fields=['@timestamp', 'user.name', 'message'], size=20)
+
+    assert es.search.call_args.kwargs['aggs'] == {
+        'first': {'min': {'field': '@timestamp'}}, 'last': {'max': {'field': '@timestamp'}},
+        'top_0': {'terms': {'field': 'event.code', 'size': 5}}, 'top_1': {'terms': {'field': 'user.name', 'size': 5}}}
+    summary = result['summary']
+    assert summary['first_event'] == '2026-09-01T00:00:00Z' and summary['last_event'] == '2026-09-02T00:00:00Z'
+    assert summary['top_values'] == {'event.code': [['4624', 800]], 'user.name': [['a', 500], ['b', 312]]}
+    assert 'all 812 matching events' in summary['note']
+    assert result['columns'] == ['@timestamp', 'user.name', 'message'] and result['rows'] == [[None, 'a', None]]
+
+
+async def test_whole_events_are_flattened(es, ctx):
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 1}, 'hits': [
+        {'_index': 'i', '_id': '1', '_source': {'user': {'name': 'a', 'roles': ['x']}, 'tags': [], 'o': {}}}]}})
+    result = await generic.search_events('i', TR, ctx, fields=['user.*'])
+    assert result['events'] == [{'user.name': 'a', 'user.roles': ['x'], 'tags': [], 'o': {}}]
+
+
+async def test_esql_suggests_stats_for_many_raw_rows(es, ctx):
+    es.esql = AsyncMock(return_value={'columns': [{'name': 'n'}], 'values': [[i] for i in range(25)]})
+    assert 'STATS' in (await generic.esql_query('FROM i | LIMIT 25', TR, ctx))['hint']
+    assert 'hint' not in await generic.esql_query('FROM i | STATS n = COUNT(*) BY x | LIMIT 25', TR, ctx)
+
+
+async def test_max_result_size_caps_every_tool_and_says_so(es, ctx):
+    es.settings.max_result_size = 2
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 100}}, 'aggregations': {'top': {
+        'buckets': [{'key': 'a', 'doc_count': 60}, {'key': 'b', 'doc_count': 30}], 'sum_other_doc_count': 10}}})
+    result = await generic.top_values('i', 'user.name', TR, ctx, size=50)
+    assert es.search.call_args.kwargs['aggs']['top']['terms']['size'] == 2
+    assert result['truncated'] and 'at most 2 rows' in result['hint']
+
+    es.search = AsyncMock(return_value=_distinct_page([('a', 1, None, 'x'), ('b', 1, None, 'y'), ('c', 1, None, 'z')]))
+    result = await generic.distinct_values('i', 'user.name', TR, ctx)
+    assert result['returned'] == 2 and result['distinct_values'] == 3 and 'at most 2 rows' in result['hint']
+
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 9}, 'hits': [{'_source': {}}] * 2}})
+    result = await generic.search_events('i', TR, ctx, size=10)
+    assert es.search.call_args.kwargs['size'] == 2 and 'at most 2 rows' in result['hint']
+
+
+async def test_search_within_the_cap_is_not_marked_truncated(es, ctx):
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 9}, 'hits': [{'_source': {}}] * 5}})
+    assert 'truncated' not in await generic.search_events('i', TR, ctx, size=5)
+
+
+async def test_top_values_keeps_to_the_response_budget(es, ctx):
+    es.settings.max_response_chars = 30
+    es.search = AsyncMock(return_value={'hits': {'total': {'value': 3}}, 'aggregations': {'top': {
+        'buckets': [{'key': 'a' * 20, 'doc_count': 2}, {'key': 'b' * 20, 'doc_count': 1}]}}})
+    result = await generic.top_values('i', 'user.name', TR, ctx)
+    assert result['rows'] == [['a' * 20, 2]] and result['truncated']
+
+
+async def test_list_data_sources_lists_only_as_many_indices_as_fit(es, ctx):
+    from sources.packs import SourcePack
+    es.settings.max_response_chars = 1000
+    ctx.lifespan_context['packs'] = [SourcePack(name='l', title='L', description='d', index='logs-2026.09.30')]
+    es.resolve_accessible = AsyncMock(return_value={
+        'indices': [{'name': f'logs-2026.{m:02}.{d:02}'} for m in range(1, 10) for d in range(1, 31)],
+        'aliases': [], 'data_streams': []})
+    es.resolve_accessible.return_value['indices'].append({'name': 'logs-2026.09.30'})
+    result = await generic.list_data_sources(ctx)
+    assert 0 < len(result['indices']) < 50 and result['truncated'] and "'index' pattern" in result['hint']
+    assert [s['name'] for s in result['sources']] == ['l']  # found among all indices, not just those listed
+
+
+async def test_searches_that_timed_out_are_marked_partial(es, ctx):
+    es.search = AsyncMock(return_value={'timed_out': True, 'hits': {'total': {'value': 1}, 'hits': [{'_source': {}}]}})
+    result = await generic.search_events('i', TR, ctx)
+    assert 'incomplete' in result['warning'] and 'time limit' in result['warning']

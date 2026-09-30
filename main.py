@@ -11,6 +11,7 @@ from security.auth import oidc_auth, oidc_http_client
 from security.policy import AccessPolicy, Caller
 from sources.packs import exposed_packs, load_packs
 from tools import deployment
+from utils.call_limits import CallLimitMiddleware
 from utils.elasticsearch import ElasticsearchGateway
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ mcp = FastMCP(
     lifespan=lifespan,
     # The HTTP client lives as long as the process; it fetches the OIDC provider's signing keys.
     auth=oidc_auth(settings, oidc_http_client(settings.oidc_ca_certs)),
-    middleware=[AuditMiddleware()],
+    middleware=[AuditMiddleware(), CallLimitMiddleware(settings)],
 )
 
 @mcp.custom_route('/healthz', methods=['GET'], include_in_schema=False)

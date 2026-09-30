@@ -97,6 +97,7 @@ def es():
     gw.settings = SimpleNamespace(max_result_size=500, max_response_chars=100_000, max_time_range_days=90,
                                   max_aggregation_range_days=366,
                                   tool_prefix="", cluster_name="", cluster_description="")
+    gw.field_caps = AsyncMock(return_value={'fields': {}})
     gw.search = AsyncMock(return_value={'hits': {'total': {'value': 1}, 'hits': [
         {'_index': 'i', '_id': '1', '_source': {'user.name': 'john.smith1'}}]}})
     return gw
@@ -110,7 +111,7 @@ def windows():
 async def test_search_tool_builds_query_from_params_and_fixed_filters(es, windows):
     async with Client(_server(es, [windows])) as c:
         result = await c.call_tool('windows_remote_access_events', {'user': 'john.smith1', 'time_range': DAY})
-    assert result.structured_content['events'][0]['event'] == {'user.name': 'john.smith1'}
+    assert result.structured_content['events'] == [{'user.name': 'john.smith1'}]
 
     index, params = es.search.call_args.args[0], es.search.call_args.kwargs
     assert index == 'ecs-microsoft-windows-*' and params['size'] == 50 and params['_source'] == ['*']
@@ -139,8 +140,8 @@ async def test_top_values_tool_with_sample_fields(es, windows):
         'sum_other_doc_count': 0}}})
     async with Client(_server(es, [windows])) as c:
         result = await c.call_tool('windows_active_users', {'time_range': DAY})
-    assert result.structured_content['values'] == [
-        {'value': 'john.smith1', 'count': 10, 'sample': {'user.id': 'S-1-5-21-1', 'user.domain': 'intranet'}}]
+    assert result.structured_content['columns'] == ['user.name', 'count', 'user.id', 'user.domain']
+    assert result.structured_content['rows'] == [['john.smith1', 10, 'S-1-5-21-1', 'intranet']]
     aggs = es.search.call_args.kwargs['aggs']['top']
     assert aggs['terms'] == {'field': 'user.name', 'size': 50}
     assert aggs['aggs']['sample']['top_hits']['_source'] == ['user.id', 'user.domain']
@@ -204,9 +205,8 @@ async def test_distinct_values_tool_lists_logons_over_a_year(es, windows):
     async with Client(_server(es, [windows])) as c:
         result = await c.call_tool('windows_logon_users',
                                    {'time_range': {'start': '2025-10-01', 'end': '2026-09-28'}})
-    assert result.structured_content['values'] == [
-        {'value': 'john.smith1', 'count': 3, 'first_seen': '2026-01-05T00:00:00Z',
-         'last_seen': '2026-09-01T00:00:00Z', 'sample': {'user.id': 'S-1-5-21-1', 'user.domain': 'intranet'}}]
+    assert result.structured_content['rows'] == [
+        ['john.smith1', 3, '2026-01-05T00:00:00Z', '2026-09-01T00:00:00Z', 'S-1-5-21-1', 'intranet']]
     assert 'only 60 days' in result.structured_content['note']
     clauses = es.search.call_args.kwargs['query']['bool']['filter']
     assert {'term': {'event.code': '4624'}} in clauses and {'term': {'user.type': 'User'}} in clauses
@@ -217,3 +217,8 @@ async def test_pack_search_tools_keep_the_event_search_limit(es, windows):
         with pytest.raises(ToolError, match='maximum of 90 days'):
             await c.call_tool('windows_user_events',
                               {'user': 'a', 'time_range': {'start': '2025-10-01', 'end': '2026-09-28'}})
+
+
+def test_search_tool_size_is_capped():
+    with pytest.raises(ValidationError, match='at most 100'):
+        ToolSpec(name='t', kind='search', description='d', size=200)

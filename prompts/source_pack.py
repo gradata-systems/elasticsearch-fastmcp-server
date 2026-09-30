@@ -137,7 +137,7 @@ yourself. Don't show the user a pack that hasn't passed. The rules it checks:
   the existing tools listed below.
 - Parameter names are lower_snake_case and aren't `time_range` or `size`.
 - `prefix` matching needs a string parameter.
-- `size` is at most 100 for `top_values` tools and at most 500 for the others.
+- `size` is at most 100 for `search` and `top_values` tools and at most 1000 for `distinct_values` tools.
 - `top_values` and `distinct_values` tools need `field`.
 - Every field you use exists in the mapping. Exact filters, parameters and aggregated fields are
   `keyword`, numeric, `ip`, `boolean` or `date`, never `text`.

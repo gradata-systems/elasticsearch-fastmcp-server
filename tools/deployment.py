@@ -48,8 +48,13 @@ def qualified(tool: Tool, names: list[str], settings: Settings) -> Tool:
     description = qualify(tool.description or '', names, prefix)
     if settings.cluster_name:
         description += f"\n\nCluster: {settings.cluster_name}."
-    return tool.model_copy(update={'name': name, 'description': description,
-                                   'parameters': _qualify_descriptions(tool.parameters, names, prefix)})
+    parameters = _qualify_descriptions(tool.parameters, names, prefix)
+    # Show the model the size the server will actually return, not just the tool's own maximum.
+    if size := parameters.get('properties', {}).get('size'):
+        for key in ('maximum', 'default'):
+            if isinstance(size.get(key), int):
+                size[key] = min(size[key], settings.max_result_size)
+    return tool.model_copy(update={'name': name, 'description': description, 'parameters': parameters})
 
 
 def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
@@ -68,6 +73,11 @@ def server_instructions(settings: Settings, packs: list[SourcePack]) -> str:
                      + f". {prefix}list_data_sources shows which of them the caller can read.")
     parts.append(f"Start with {prefix}list_data_sources to see what the caller can query, and the source packs "
                  f"with their key fields and tools.")
+    parts.append(f"Results come as tables of 'columns' and 'rows'. Take numbers from what the tools return (total, "
+                 f"count, summary, distinct_values) and never by counting rows yourself; for questions about how "
+                 f"many, use {prefix}top_values, {prefix}distinct_values or {prefix}esql_query with STATS rather than "
+                 f"a large search. Show the user only as many rows as they need, and say when a result was "
+                 f"truncated.")
     if name:
         parts.append(
             "You may also be connected to other deployments of this server for other clusters, offering the same "

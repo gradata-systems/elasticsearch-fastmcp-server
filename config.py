@@ -15,14 +15,20 @@ class Settings(BaseSettings):
     es_ca_certs: Path | None = None
     es_impersonator_username: str
     es_impersonator_password: SecretStr
-    es_request_timeout: float = 30.0
-    max_result_size: int = 500
+    es_request_timeout: float = Field(default=30.0, gt=0)
+    # Most rows any tool returns.
+    max_result_size: int = Field(default=500, ge=1)
     # Upper bound on serialized tool output, to protect the model's context window.
-    max_response_chars: int = 100_000
-    max_time_range_days: int = 90
+    max_response_chars: int = Field(default=100_000, ge=1000)
+    max_time_range_days: int = Field(default=90, ge=1)
     # Longer limit for tools that return counts rather than events (top values, distinct values,
     # period comparisons, ES|QL with STATS): aggregating a long period is cheap for Elasticsearch.
-    max_aggregation_range_days: int = 366
+    max_aggregation_range_days: int = Field(default=366, ge=1)
+    # Longest a whole tool call may take, however many Elasticsearch requests it makes.
+    tool_timeout: float = Field(default=60.0, gt=0)
+    # Identical calls (same caller, tool and arguments) allowed within the window; more are refused.
+    max_repeated_calls: int = Field(default=3, ge=1)
+    repeated_call_window_seconds: int = Field(default=300, ge=1)
 
     # Identity of this deployment, which serves one cluster. Agents may use several deployments at
     # once, one per cluster: the name and description tell them apart, and the prefix keeps tool names

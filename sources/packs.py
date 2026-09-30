@@ -20,7 +20,8 @@ from pydantic import (BaseModel, ConfigDict, Field, ValidationError, create_mode
 from pydantic.json_schema import SkipJsonSchema
 
 from security.policy import matches_index_expression
-from tools.generic import retention_note, run_distinct_values, run_search, run_top_values
+from tools.generic import (MAX_SEARCH_SIZE, retention_note, run_distinct_values, run_search, run_top_values,
+                           summary_fields)
 from tools.query import Filter, TimeRange, build_query
 from utils.elasticsearch import gateway_from
 
@@ -29,6 +30,10 @@ logger = logging.getLogger(__name__)
 _NAME = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 # Characters Elasticsearch forbids in index names, other than the '*' wildcard.
 _INVALID_INDEX_CHARS = re.compile(r'[\s\\/?"<>|#]')
+
+
+# Most results a caller may ask a generated tool for, by kind; the generic tools have the same caps.
+_SIZE_LIMITS = {'search': MAX_SEARCH_SIZE, 'top_values': 100, 'distinct_values': 1000}
 
 
 class ParamSpec(BaseModel):
@@ -80,8 +85,8 @@ class ToolSpec(BaseModel):
             raise ValueError(f"tool name '{self.name}' must be lower_snake_case")
         if self.kind != 'search' and not self.field:
             raise ValueError(f"{self.kind} tool '{self.name}' needs 'field'")
-        if self.kind == 'top_values' and self.size > 100:
-            raise ValueError(f"top_values tool '{self.name}' size must be at most 100")
+        if self.size > _SIZE_LIMITS[self.kind]:
+            raise ValueError(f"{self.kind} tool '{self.name}' size must be at most {_SIZE_LIMITS[self.kind]}")
         reserved = {'time_range', 'size'} & set(self.params)
         if reserved or not all(_NAME.match(p) for p in self.params):
             raise ValueError(f"invalid parameter names in '{self.name}': {sorted(self.params)}")
@@ -163,8 +168,6 @@ def load_packs(directory: Path) -> list[SourcePack]:
     return packs
 
 
-# Most results a caller may ask a generated tool for, by kind; the generic tools have the same caps.
-_SIZE_LIMITS = {'search': 500, 'top_values': 100, 'distinct_values': 1000}
 
 
 def _arguments_model(pack: SourcePack, spec: ToolSpec) -> type[BaseModel]:
@@ -211,8 +214,11 @@ class SourceTool(Tool):
         max_days = es.settings.max_time_range_days if spec.kind == 'search' else es.settings.max_aggregation_range_days
         query = build_query(args.time_range, pack.timestamp_field, max_days, spec.filters, spec.query, extra)
         if spec.kind == 'search':
-            result = await run_search(es, pack.index, query, spec.fields or pack.default_fields or None,
-                                      args.size, spec.sort, pack.timestamp_field)
+            fields = spec.fields or pack.default_fields or None
+            summarise = await summary_fields(es, pack.index, [pack.event_type_field, *(fields or [])], args.size,
+                                             pack.timestamp_field)
+            result = await run_search(es, pack.index, query, fields, args.size, spec.sort, pack.timestamp_field,
+                                      summarise)
         elif spec.kind == 'top_values':
             result = await run_top_values(es, pack.index, query, spec.field, args.size, spec.include_fields)
         else:

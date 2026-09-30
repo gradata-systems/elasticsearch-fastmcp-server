@@ -140,3 +140,12 @@ async def check_fields(es: ElasticsearchGateway, index: str, *, filters: Iterabl
         if any(p.startswith('No field') for p in problems):
             problems.append(f"Use {es.settings.tool_prefix}describe_fields to list the fields.")
         raise ToolError(' '.join(problems))
+
+
+async def aggregatable_fields(es: ElasticsearchGateway, index: str, fields: Iterable[str]) -> list[str]:
+    """Those of `fields` that every index in `index` can aggregate on, in order."""
+    names = [f for f in dict.fromkeys(fields) if f and not f.startswith('_') and not any(c in f for c in '*?')]
+    if not names:
+        return []
+    mapped = (await es.field_caps(index, names)).get('fields', {})
+    return [f for f in names if f in mapped and all(c.get('aggregatable') for c in mapped[f].values())]

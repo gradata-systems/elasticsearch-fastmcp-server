@@ -31,6 +31,7 @@ works without a restart. Don't use `copytruncate`, which can lose lines written 
 | `tool_call` | every tool invocation, when it finishes | `tool`, `arguments`, `outcome` (`success` or `error`), `error`, `duration_ms` |
 | `es_request` | every Elasticsearch request | `api` (`search`, `esql`, `field_caps`, `resolve_index`), `es_user`, `index`, `request`, `outcome` (`success`, `partial` or `error`), `error`, `took_ms`, and result counts |
 | `access_denied` | a request refused by the server or by Elasticsearch | `reason`, `es_user`, `index`, and `api` and `request` where there is one |
+| `call_refused` | a tool call stopped by the server's call limits | `tool`, `arguments`, `reason`: `repeated` (the same call made too often, see `ES_MCP_MAX_REPEATED_CALLS`) or `timeout` (longer than `ES_MCP_TOOL_TIMEOUT`) |
 
 Result counts depend on the API: `hits_returned`, `hits_total` and `shards_failed` for searches,
 `rows` for ES|QL, and `fields_returned` for field capabilities.
@@ -88,5 +89,7 @@ server's use:
 - Every index a person queried: `distinct_values` on `index`, filtered on `username` and
   `event: es_request`.
 - Refused requests: filter on `event: access_denied` and rank `reason` with `top_values`.
+- Clients stuck in a loop: filter on `event: call_refused` and `reason: repeated`, and rank `username`
+  or `client_id`.
 - Slow or failing tools: filter on `event: tool_call` and sort by `duration_ms`, or filter on
   `outcome: error`.

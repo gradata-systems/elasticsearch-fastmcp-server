@@ -8,9 +8,9 @@ from pydantic import Field
 
 from security.esql import aggregates, quoted_field_names, source_indices
 from security.policy import matches_index_expression
-from tools.checks import check_fields
-from tools.query import Filter, TimeRange, bool_query, build_query, field_value, fit_to_budget
-from utils.elasticsearch import ElasticsearchGateway, gateway_from, shard_failure
+from tools.checks import aggregatable_fields, check_fields
+from tools.query import Filter, TimeRange, bool_query, build_query, field_value, fit_to_budget, flatten
+from utils.elasticsearch import ElasticsearchGateway, gateway_from, incomplete
 
 Index = Annotated[str, Field(
     description="Index, alias, data stream or pattern from list_data_sources, e.g. 'ecs-microsoft-windows-*'. "
@@ -28,6 +28,13 @@ _TRUNCATED_HINT = "Output was truncated; narrow the time range, add filters, or 
 # distinct_values and compare_periods page through every group with a composite aggregation, up to this many.
 _PAGE_SIZE = 1000
 _MAX_GROUPS = 10_000
+
+# Searches for at least this many events also summarise every matching event, so that the model
+# reads counts from Elasticsearch instead of counting rows itself.
+SUMMARY_MIN_SIZE = 20
+_SUMMARY_FIELDS = 6
+_SUMMARY_VALUES = 5
+MAX_SEARCH_SIZE = 100
 
 
 def retention_note(packs: list[Any], index: str, start: datetime) -> str | None:
@@ -51,13 +58,52 @@ def _add_retention_note(result: dict[str, Any], ctx: Context, index: str, start:
 
 
 def _with_shard_warning(result: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    if reason := shard_failure(body):
+    if reason := incomplete(body):
         result['warning'] = f"Results are incomplete because part of the data could not be searched: {reason}"
     return result
 
 
+def _capped(es: ElasticsearchGateway, size: int) -> tuple[int, bool]:
+    """`size` limited to the server's ES_MCP_MAX_RESULT_SIZE, and whether it was lowered."""
+    limit = es.settings.max_result_size
+    return min(size, limit), size > limit
+
+
+def _cap_hint(es: ElasticsearchGateway) -> str:
+    return (f"This server returns at most {es.settings.max_result_size} rows per call; add filters, narrow the "
+            f"time range or aggregate rather than asking for more.")
+
+
+async def summary_fields(es: ElasticsearchGateway, index: str, candidates: list[str | None], size: int,
+                         timestamp_field: str) -> list[str]:
+    """The fields a search of `size` events summarises: aggregatable `candidates`, other than the timestamp."""
+    if size < SUMMARY_MIN_SIZE:
+        return []
+    names = [f for f in candidates if f and f != timestamp_field]
+    return (await aggregatable_fields(es, index, names))[:_SUMMARY_FIELDS]
+
+
+def _summary(body: dict[str, Any], fields: list[str]) -> dict[str, Any]:
+    aggs = body.get('aggregations', {})
+    summary: dict[str, Any] = {
+        'first_event': aggs.get('first', {}).get('value_as_string'),
+        'last_event': aggs.get('last', {}).get('value_as_string'),
+    }
+    if fields:
+        summary['top_values'] = {f: [[b.get('key_as_string', b['key']), b['doc_count']]
+                                     for b in aggs.get(f'top_{i}', {}).get('buckets', [])]
+                                 for i, f in enumerate(fields)}
+    summary['note'] = (f"Covers all {body['hits']['total']['value']} matching events, not only the rows "
+                       f"returned. Take counts from here and from 'total' rather than counting rows.")
+    return summary
+
+
 async def run_search(es: ElasticsearchGateway, index: str, query: dict[str, Any], fields: list[str] | None,
-                     size: int, sort: str, timestamp_field: str) -> dict[str, Any]:
+                     size: int, sort: str, timestamp_field: str, summarise: list[str] = ()) -> dict[str, Any]:
+    """Search for events. With `fields` named exactly, returns them as a table of columns and rows;
+    otherwise as flattened events. Searches for SUMMARY_MIN_SIZE or more events add a summary of every
+    matching event, with the top values of the `summarise` fields."""
+    size, capped = _capped(es, size)
     params: dict[str, Any] = {
         'query': query,
         'size': size,
@@ -66,42 +112,69 @@ async def run_search(es: ElasticsearchGateway, index: str, query: dict[str, Any]
     }
     if fields:
         params['_source'] = fields
+    if size >= SUMMARY_MIN_SIZE:
+        params['aggs'] = {'first': {'min': {'field': timestamp_field}}, 'last': {'max': {'field': timestamp_field}}}
+        params['aggs'] |= {f'top_{i}': {'terms': {'field': f, 'size': _SUMMARY_VALUES}}
+                           for i, f in enumerate(summarise)}
     body = await es.search(index, **params)
 
-    events = [{'index': h['_index'], 'id': h['_id'], 'event': h.get('_source', {})} for h in body['hits']['hits']]
-    events, truncated = fit_to_budget(events, es.settings.max_response_chars)
-    result: dict[str, Any] = {'total': body['hits']['total']['value'], 'returned': len(events), 'events': events}
+    sources = [h.get('_source', {}) for h in body['hits']['hits']]
+    result: dict[str, Any] = {'total': body['hits']['total']['value']}
+    if fields and not any('*' in f or '?' in f for f in fields):
+        rows, truncated = fit_to_budget([[field_value(s, f) for f in fields] for s in sources],
+                                        es.settings.max_response_chars)
+        result |= {'returned': len(rows), 'columns': fields, 'rows': rows}
+    else:
+        events, truncated = fit_to_budget([flatten(s) for s in sources], es.settings.max_response_chars)
+        result |= {'returned': len(events), 'events': events}
+    if 'aggs' in params:
+        result['summary'] = _summary(body, list(summarise))
     if truncated:
         result['truncated'] = True
         result['hint'] = _TRUNCATED_HINT
+    elif capped and result['total'] > result['returned']:
+        result['truncated'] = True
+        result['hint'] = _cap_hint(es)
     return _with_shard_warning(result, body)
 
 
 async def run_top_values(es: ElasticsearchGateway, index: str, query: dict[str, Any], field: str, size: int,
                          include_fields: list[str] | None = None) -> dict[str, Any]:
+    size, capped = _capped(es, size)
     terms: dict[str, Any] = {'terms': {'field': field, 'size': size}}
     if include_fields:
         terms['aggs'] = {'sample': {'top_hits': {'size': 1, '_source': include_fields}}}
     body = await es.search(index, size=0, query=query, aggs={'top': terms}, track_total_hits=True)
 
     agg = body['aggregations']['top']
-    values = []
-    for bucket in agg['buckets']:
-        value = {'value': bucket.get('key_as_string', bucket['key']), 'count': bucket['doc_count']}
-        if include_fields:
-            hits = bucket['sample']['hits']['hits']
-            source = hits[0].get('_source', {}) if hits else {}
-            value['sample'] = {f: field_value(source, f) for f in include_fields}
-        values.append(value)
+    rows, truncated = fit_to_budget(
+        [[bucket.get('key_as_string', bucket['key']), bucket['doc_count'], *_sample(bucket, include_fields)]
+         for bucket in agg['buckets']], es.settings.max_response_chars)
     result: dict[str, Any] = {
         'total_events': body['hits']['total']['value'],
-        'values': values,
         'events_with_other_values': agg.get('sum_other_doc_count', 0),
+        'columns': [field, 'count', *(include_fields or [])],
+        'rows': rows,
     }
-    if result['total_events'] and not values:
+    if truncated:
+        result['truncated'] = True
+        result['hint'] = "Output was truncated; ask for fewer values or fewer include_fields."
+    elif capped and result['events_with_other_values']:
+        result['truncated'] = True
+        result['hint'] = _cap_hint(es)
+    elif result['total_events'] and not rows:
         result['hint'] = (f"None of the matching events have a value for '{field}'; it may not exist in this "
                           f"index. Use {es.settings.tool_prefix}describe_fields to find the right field.")
     return _with_shard_warning(result, body)
+
+
+def _sample(bucket: dict[str, Any], include_fields: list[str] | None) -> list[Any]:
+    """The `include_fields` of the example event in a bucket's 'sample' aggregation."""
+    if not include_fields:
+        return []
+    hits = bucket['sample']['hits']['hits']
+    source = hits[0].get('_source', {}) if hits else {}
+    return [field_value(source, f) for f in include_fields]
 
 
 async def _composite_buckets(es: ElasticsearchGateway, index: str, query: dict[str, Any],
@@ -117,7 +190,7 @@ async def _composite_buckets(es: ElasticsearchGateway, index: str, query: dict[s
         if after_key:
             composite['after'] = after_key
         body = await es.search(index, size=0, query=query, aggs={'groups': {'composite': composite, 'aggs': aggs}})
-        if not failed_page and shard_failure(body):
+        if not failed_page and incomplete(body):
             failed_page = body
         agg = body['aggregations']['groups']
         buckets += agg['buckets']
@@ -128,16 +201,18 @@ async def _composite_buckets(es: ElasticsearchGateway, index: str, query: dict[s
         after_key = agg['after_key']
 
 
+# Sort keys for distinct_values rows: [value, count, first_seen, last_seen, *samples].
 _DISTINCT_ORDER = {
-    'last_seen': (lambda v: v['last_seen'] or '', True),
-    'count': (lambda v: v['count'], True),
-    'value': (lambda v: str(v['value']), False),
+    'last_seen': (lambda row: row[3] or '', True),
+    'count': (lambda row: row[1], True),
+    'value': (lambda row: str(row[0]), False),
 }
 
 
 async def run_distinct_values(es: ElasticsearchGateway, index: str, query: dict[str, Any], field: str, size: int,
                               timestamp_field: str, order: str = 'last_seen',
                               include_fields: list[str] | None = None) -> dict[str, Any]:
+    size, capped = _capped(es, size)
     aggs: dict[str, Any] = {'first_seen': {'min': {'field': timestamp_field}},
                             'last_seen': {'max': {'field': timestamp_field}}}
     if include_fields:
@@ -145,29 +220,24 @@ async def run_distinct_values(es: ElasticsearchGateway, index: str, query: dict[
     buckets, complete, failed_page = await _composite_buckets(
         es, index, query, [{field: {'terms': {'field': field}}}], aggs)
 
-    values = []
-    for bucket in buckets:
-        value = {'value': bucket['key'][field], 'count': bucket['doc_count'],
-                 'first_seen': bucket['first_seen'].get('value_as_string'),
-                 'last_seen': bucket['last_seen'].get('value_as_string')}
-        if include_fields:
-            hits = bucket['sample']['hits']['hits']
-            source = hits[0].get('_source', {}) if hits else {}
-            value['sample'] = {f: field_value(source, f) for f in include_fields}
-        values.append(value)
+    values = [[bucket['key'][field], bucket['doc_count'], bucket['first_seen'].get('value_as_string'),
+               bucket['last_seen'].get('value_as_string'), *_sample(bucket, include_fields)]
+              for bucket in buckets]
     key, reverse = _DISTINCT_ORDER[order]
     values.sort(key=key, reverse=reverse)
     rows, truncated = fit_to_budget(values[:size], es.settings.max_response_chars)
 
-    result: dict[str, Any] = {'distinct_values': len(values), 'returned': len(rows), 'values': rows}
+    result: dict[str, Any] = {'distinct_values': len(values), 'returned': len(rows),
+                              'columns': [field, 'count', 'first_seen', 'last_seen', *(include_fields or [])],
+                              'rows': rows}
     if not complete:
         result['distinct_values_complete'] = False
         result['hint'] = (f"There are more than {len(values)} distinct values and only that many were read; "
                           f"add filters or narrow the time range for a complete list.")
     elif truncated or len(rows) < len(values):
         result['truncated'] = True
-        result['hint'] = ("More values exist than were returned; raise size, add filters or request fewer "
-                          "include_fields.")
+        result['hint'] = _cap_hint(es) if capped and not truncated else (
+            "More values exist than were returned; raise size, add filters or request fewer include_fields.")
     return _with_shard_warning(result, failed_page)
 
 
@@ -197,6 +267,12 @@ async def list_data_sources(ctx: Context) -> dict[str, Any]:
     readable = set(result['indices']) | set(result['aliases']) | set(result['data_streams'])
     result['sources'] = [pack.summary(es.settings.tool_prefix) for pack in ctx.lifespan_context.get('packs', [])
                          if any(matches_index_expression(name, pack.index) for name in readable)]
+    # Clusters with daily indices can have thousands; the data sources' patterns matter more.
+    result['indices'], truncated = fit_to_budget(result['indices'], es.settings.max_response_chars // 2)
+    if truncated:
+        result['truncated'] = True
+        result['hint'] = ("Only some indices are listed. Query a data source by its 'index' pattern, or use a "
+                          "wildcard pattern for indices outside the data sources.")
     return result
 
 
@@ -235,9 +311,12 @@ async def search_events(
         filters: Filters = [],
         query: QueryString = None,
         fields: Annotated[list[str] | None, Field(
-            description="Fields to return for each event, e.g. ['@timestamp', 'user.name', 'source.ip']. "
-                        "Wildcards allowed. Omit to return whole events.")] = None,
-        size: Annotated[int, Field(ge=1, le=500, description="Maximum number of events to return.")] = 20,
+            description="Fields to return for each event, e.g. ['@timestamp', 'user.name', 'source.ip'], as "
+                        "a table with one column per field. Name only the fields you need; wildcards are "
+                        "allowed but return whole events, which are much larger.")] = None,
+        size: Annotated[int, Field(ge=1, le=MAX_SEARCH_SIZE, description=(
+            f"Maximum number of events to return. From {SUMMARY_MIN_SIZE}, the result also summarises every "
+            f"matching event."))] = 20,
         sort: Annotated[Literal['desc', 'asc'], Field(
             description="'desc' for most recent first, 'asc' for chronological order.")] = 'desc',
         timestamp_field: TimestampField = '@timestamp',
@@ -245,13 +324,15 @@ async def search_events(
     """
     Search for individual events in a time range, optionally narrowed by exact-match filters and a
     full-text query. Returns the total number of matches and up to `size` events.
-    To count or rank values (e.g. top source IPs), use top_values instead.
+    To count or rank values (e.g. top source IPs), use top_values instead; don't count returned rows.
     """
     es = gateway_from(ctx)
     await check_fields(es, index, filters=filters, query=query, timestamp_field=timestamp_field)
+    event_types = [p.event_type_field for p in ctx.lifespan_context.get('packs', []) if p.overlaps(index)]
+    summarise = await summary_fields(es, index, event_types + (fields or []), size, timestamp_field)
     result = await run_search(
         es, index, build_query(time_range, timestamp_field, es.settings.max_time_range_days, filters, query),
-        fields, size, sort, timestamp_field)
+        fields, size, sort, timestamp_field, summarise)
     return _add_retention_note(result, ctx, index, time_range.start)
 
 
@@ -408,17 +489,18 @@ async def compare_periods(
         status = _classify(before_count, after_count, expected_after, min_change_percent / 100)
         if status not in _WANTED_CHANGES[changes]:
             continue
-        changed.append((abs(after_count - expected_after), {
-            'group': key,
-            'status': status,
-            'before_count': before_count,
-            'after_count': after_count,
-            'before_per_day': round(before_count / before_days, 2),
-            'after_per_day': round(after_count / after_days, 2),
-            'change_percent': round((after_count / expected_after - 1) * 100) if before_count else None,
-        }))
+        changed.append((abs(after_count - expected_after), [
+            *(key[f] for f in group_by),
+            status,
+            before_count,
+            after_count,
+            round(before_count / before_days, 2),
+            round(after_count / after_days, 2),
+            round((after_count / expected_after - 1) * 100) if before_count else None,
+        ]))
     # Biggest difference from the baseline rate first, so a stopped busy group outranks a quiet one.
     changed.sort(key=lambda item: item[0], reverse=True)
+    size, _ = _capped(es, size)
     rows, truncated = fit_to_budget([row for _, row in changed[:size]], es.settings.max_response_chars)
 
     before_total, after_total = sum(g[1] for g in groups), sum(g[2] for g in groups)
@@ -427,7 +509,10 @@ async def compare_periods(
         'before_days': round(before_days, 2), 'after_days': round(after_days, 2),
         'before_events': before_total, 'after_events': after_total,
         'groups_compared': len(groups), 'groups_changed': len(changed),
-        'returned': len(rows), 'changes': rows,
+        'returned': len(rows),
+        'columns': [*group_by, 'status', 'before_count', 'after_count', 'before_per_day', 'after_per_day',
+                    'change_percent'],
+        'rows': rows,
     }
     if truncated or len(rows) < len(changed):
         result['truncated'] = True
@@ -472,13 +557,15 @@ async def esql_query(
     body = await es.esql(query, time_range.to_query(timestamp_field, max_days))
 
     columns = [c['name'] for c in body.get('columns', [])]
-    rows = [dict(zip(columns, values)) for values in body.get('values', [])]
+    rows = body.get('values', [])
     limited = rows[:es.settings.max_result_size]
     limited, truncated = fit_to_budget(limited, es.settings.max_response_chars)
     result: dict[str, Any] = {'columns': columns, 'returned': len(limited), 'rows': limited}
     if truncated or len(limited) < len(rows):
         result['truncated'] = True
         result['hint'] = "Output was truncated; add STATS to aggregate or a smaller LIMIT."
+    elif len(rows) >= SUMMARY_MIN_SIZE and not aggregates(query):
+        result['hint'] = "To count or rank these rows, run the query again with STATS rather than counting them."
     # The gateway parsed the query's indices before running it, so this can't fail here.
     return _add_retention_note(result, ctx, ','.join(source_indices(query)), time_range.start)
 

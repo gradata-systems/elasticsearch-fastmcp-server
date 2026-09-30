@@ -117,6 +117,12 @@ spec:
               value: {{ .Values.limits.maxTimeRangeDays | quote }}
             - name: ES_MCP_MAX_AGGREGATION_RANGE_DAYS
               value: {{ .Values.limits.maxAggregationRangeDays | quote }}
+            - name: ES_MCP_TOOL_TIMEOUT
+              value: {{ .Values.limits.toolTimeoutSeconds | quote }}
+            - name: ES_MCP_MAX_REPEATED_CALLS
+              value: {{ .Values.limits.maxRepeatedCalls | quote }}
+            - name: ES_MCP_REPEATED_CALL_WINDOW_SECONDS
+              value: {{ .Values.limits.repeatedCallWindowSeconds | quote }}
             {{- if .Values.accessPolicy }}
             - name: ES_MCP_ACCESS_POLICY_FILE
               value: /etc/es-mcp/config/access_policy.yaml

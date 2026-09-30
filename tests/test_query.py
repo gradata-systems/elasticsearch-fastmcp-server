@@ -61,3 +61,13 @@ def test_fit_to_budget():
     rows = [{'a': 'x' * 10}] * 5  # 17 chars each
     assert fit_to_budget(rows, 40) == (rows[:2], True)
     assert fit_to_budget(rows, 1000) == (rows, False)
+
+
+def test_long_strings_are_shortened_to_fit():
+    from tools.query import MAX_VALUE_CHARS
+    long = 'x' * (MAX_VALUE_CHARS + 500)
+    rows, truncated = fit_to_budget([{'message': long, 'tags': [long], 'n': 1}], MAX_VALUE_CHARS * 3)
+    assert not truncated
+    message = rows[0]['message']
+    assert message.startswith('x' * MAX_VALUE_CHARS) and message.endswith('... [500 more characters not shown]')
+    assert rows[0]['tags'] == [message] and rows[0]['n'] == 1

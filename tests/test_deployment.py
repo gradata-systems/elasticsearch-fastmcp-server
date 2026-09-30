@@ -77,6 +77,7 @@ async def test_without_prefix_or_cluster_nothing_changes():
 async def test_prefixed_pack_tools_still_run():
     mcp, es = _server(_settings('prod_'), [p for p in load_packs(REPO_PACKS) if p.name == 'windows'])
     es.search = AsyncMock(return_value={'hits': {'total': {'value': 0}, 'hits': []}})
+    es.field_caps = AsyncMock(return_value={'fields': {}})
     async with Client(mcp) as client:
         result = await client.call_tool('prod_windows_user_events', {'user': 'john.smith1', 'time_range': DAY})
     assert result.structured_content['total'] == 0
@@ -99,6 +100,15 @@ def test_tool_prefix_must_be_lower_snake_case_ending_in_underscore():
             Settings(**required, tool_prefix=bad)
 
 
+@pytest.mark.parametrize('limit', ['max_result_size', 'max_time_range_days', 'max_aggregation_range_days',
+                                   'max_response_chars', 'es_request_timeout'])
+def test_limits_must_be_positive(limit):
+    required = dict(es_url='https://es:9200', es_impersonator_username='u', es_impersonator_password='p',
+                    oidc_issuer='https://idp/realms/r', oidc_audience='a', public_base_url='https://m')
+    with pytest.raises(ValidationError):
+        Settings(**required, **{limit: 0})
+
+
 def test_instructions_name_the_cluster_and_say_to_ask_when_unclear():
     packs = load_packs(REPO_PACKS)
     text = deployment.server_instructions(_settings('prod_', 'Production SIEM', 'Security logs for the head office'),
@@ -108,6 +118,7 @@ def test_instructions_name_the_cluster_and_say_to_ask_when_unclear():
     assert 'Source packs (known data sources) on this cluster: ' in text
     assert 'Microsoft Windows security events (ecs-microsoft-windows-*)' in text
     assert 'Start with prod_list_data_sources' in text
+    assert 'never by counting rows yourself' in text and 'use prod_top_values, prod_distinct_values' in text
     # The cluster is chosen by the source packs the caller can read, never by unpacked indices.
     assert "the 'sources' in its prod_list_data_sources result" in text
     assert 'that no source pack describes' in text and 'ask the user which cluster they mean' in text
@@ -151,3 +162,15 @@ def test_audit_events_name_the_cluster(capsys):
     finally:
         audit.configure_audit_log(None)
         logging.getLogger('audit').handlers.clear()
+
+
+async def test_tool_schemas_show_the_servers_result_size_limit():
+    settings = _settings()
+    settings.max_result_size = 50
+    mcp, _ = _server(settings, load_packs(REPO_PACKS))
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in await client.list_tools()}
+    assert tools['distinct_values'].input_schema['properties']['size'] == {
+        **tools['distinct_values'].input_schema['properties']['size'], 'maximum': 50, 'default': 50}
+    assert tools['search_events'].input_schema['properties']['size']['maximum'] == 50
+    assert tools['windows_logon_users'].input_schema['properties']['size']['maximum'] == 50

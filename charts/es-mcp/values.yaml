@@ -66,6 +66,11 @@ limits:
   maxResponseChars: 100000
   maxTimeRangeDays: 90
   maxAggregationRangeDays: 366
+  # Longest a whole tool call may take, however many Elasticsearch requests it makes.
+  toolTimeoutSeconds: 60
+  # Identical calls (same user, tool and arguments) allowed within the window; more are refused.
+  maxRepeatedCalls: 3
+  repeatedCallWindowSeconds: 300
 
 # Replaces the image's access_policy.yaml when set, e.g.
 #   exposed_indices: [ecs-microsoft-windows-*, ecs-fortios-*]

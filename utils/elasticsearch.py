@@ -30,6 +30,15 @@ def _error_reason(e: ApiError) -> str:
     return _describe(error) if isinstance(error, dict) else str(e)
 
 
+def incomplete(body: dict[str, Any]) -> str | None:
+    """Why a search response holds only part of the results, if it does."""
+    if reason := shard_failure(body):
+        return reason
+    if body.get('timed_out'):
+        return "Elasticsearch stopped searching when the time limit ran out"
+    return None
+
+
 def shard_failure(body: dict[str, Any]) -> str | None:
     """Reason for the first shard failure in a search response, if any shard failed."""
     shards = body.get('_shards') or {}
@@ -135,6 +144,8 @@ class ElasticsearchGateway:
     async def search(self, index: str, **params: Any) -> dict[str, Any]:
         if 'size' in params:
             params['size'] = max(0, min(params['size'], self.settings.max_result_size))
+        # Stop searching shortly before the client gives up, and return what was found so far.
+        params.setdefault('timeout', f'{int(self.settings.es_request_timeout * 900)}ms')
         return await self._execute('search', index, params,
                                    lambda c: c.search(index=index, **params), _hits_summary)
 

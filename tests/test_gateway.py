@@ -76,11 +76,12 @@ async def test_search_runs_as_caller_and_caps_size(gateway):
         await gateway.search('ecs-microsoft-windows-v1', size=10_000, query={'match_all': {}})
     event, fields = audit.call_args.args[0], audit.call_args.kwargs
     assert event == 'es_request' and fields['outcome'] == 'success' and fields['es_user'] == 'john.smith1'
-    assert fields['request'] == {'size': 100, 'query': {'match_all': {}}}
+    # Elasticsearch stops just before the client's 30 second request timeout.
+    assert fields['request'] == {'size': 100, 'query': {'match_all': {}}, 'timeout': '27000ms'}
 
     gateway._client.options.assert_called_once_with(headers={RUN_AS: 'john.smith1'}, opaque_id='mcp:john.smith1')
     gateway._client.options.return_value.search.assert_awaited_once_with(
-        index='ecs-microsoft-windows-v1', size=100, query={'match_all': {}})
+        index='ecs-microsoft-windows-v1', size=100, query={'match_all': {}}, timeout='27000ms')
 
 
 async def test_agent_service_account_runs_as_itself(gateway):
